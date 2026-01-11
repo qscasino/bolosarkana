@@ -69,14 +69,9 @@ function clamp(v, a, b) {
 }
 
 const AUDIO_URLS = {
-  charge: "./assets/audio/charge.mp3",
-  throw: "./assets/audio/throw.mp3",
-  hit: "./assets/audio/hit.mp3",
-  strike: "./assets/audio/strike.mp3",
-  spare: "./assets/audio/spare.mp3",
-  reward: "./assets/audio/reward.mp3",
-  fail: "./assets/audio/fail.mp3",
-  ambient: "./assets/audio/ambient.mp3",
+  ambient: "./assets/ambient.mp3",
+  hit: "./assets/hit.mp3",
+  reward: "./assets/reward.mp3",
 };
 
 const AudioSys = (() => {
