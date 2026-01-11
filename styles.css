@@ -308,7 +308,7 @@ html, body {
 /* Buttons */
 .ui-launch {
   position: absolute;
-  bottom: 22px;
+  bottom: 60px;
   left: 50%;
   transform: translateX(-50%);
   pointer-events: auto;
