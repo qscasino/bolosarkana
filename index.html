@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <meta name="theme-color" content="#0a1628" />
+    <title>Arkana Bowling | Arkana Games</title>
+    <meta
+      name="description"
+      content="3D Casino Beach Bowling Game by Arkana Games - Experience the thrill of bowling in a casino beach paradise!"
+    />
+    <meta name="keywords" content="bowling, game, 3d, casino, beach, arkana games" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800;900&family=Orbitron:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+
+  <body>
+    <div id="app">
+      <div id="three-container"></div>
+
+      <div id="loading-screen" class="loading">
+        <div class="loading-inner">
+          <div class="loading-logo">
+            <h1 class="loading-arkana">ARKANA</h1>
+            <h2 class="loading-games">GAMES</h2>
+          </div>
+
+          <div class="loading-ball-wrap">
+            <div class="loading-ball">
+              <span class="hole h1"></span>
+              <span class="hole h2"></span>
+              <span class="hole h3"></span>
+            </div>
+            <div class="loading-ping"></div>
+          </div>
+
+          <div class="loading-bar">
+            <div id="loading-bar-fill" class="loading-bar-fill"></div>
+          </div>
+          <div class="loading-text">Cargando Casino Beach Bowling...</div>
+
+          <div class="loading-dots">
+            <span class="dot d1"></span>
+            <span class="dot d2"></span>
+            <span class="dot d3"></span>
+          </div>
+
+          <div class="corner tl"></div>
+          <div class="corner tr"></div>
+          <div class="corner bl"></div>
+          <div class="corner br"></div>
+        </div>
+      </div>
+
+      <div id="ui" class="ui">
+        <div class="ui-title">
+          <img class="ui-logo" src="assets/logobolos.png" alt="Arkana Games" />
+        </div>
+
+
+        <div id="strike-overlay" class="big-overlay hidden">
+          <div class="big-text strike">STRIKE!</div>
+          <div class="big-sub strike-sub">+100 BONUS</div>
+        </div>
+
+        <div id="spare-overlay" class="big-overlay hidden">
+          <div class="big-text spare">SPARE!</div>
+          <div class="big-sub spare-sub">+50 BONUS</div>
+        </div>
+
+        <div class="ui-power">
+          <div class="panel">
+            <div class="panel-title">Power</div>
+            <div class="power-track">
+              <div id="power-fill" class="power-fill"></div>
+              <div class="mark m25"></div>
+              <div class="mark m50"></div>
+              <div class="mark m75"></div>
+              <div id="power-glow" class="power-glow hidden"></div>
+            </div>
+            <div id="power-percent" class="panel-big">0%</div>
+          </div>
+        </div>
+
+        <div id="direction-control" class="ui-direction" aria-label="direction control">
+          <div class="dir-wrap">
+            <div class="dir-track"></div>
+            <div class="dir-center"></div>
+            <div id="direction-indicator" class="dir-indicator"></div>
+            <div class="dir-label left">L</div>
+            <div class="dir-label right">R</div>
+          </div>
+        </div>
+
+        <div class="ui-launch">
+          <button id="launch-btn" class="btn btn-aiming" type="button">LANZAR</button>
+        </div>
+
+        <div id="instructions" class="ui-instructions">
+          <div class="inst">
+            <div>PC: Flechas para apuntar, Espacio para lanzar</div>
+            <div>Mobile: Desliza para apuntar, Mantén botón</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
