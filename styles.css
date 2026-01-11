@@ -31,7 +31,7 @@ html, body {
   inset: 0;
 }
 
-/* UI overlay */
+
 .ui {
   position: absolute;
   inset: 0;
@@ -39,7 +39,7 @@ html, body {
   user-select: none;
 }
 
-/* Title / Logo */
+
 .ui-title {
   position: absolute;
   top: 12px;
@@ -48,7 +48,7 @@ html, body {
   pointer-events: auto;
 }
 
-/* ✅ NUEVO: logo en vez del texto */
+
 .ui-logo{
   display: block;
   width: min(240px, 62vw);
@@ -59,7 +59,7 @@ html, body {
     drop-shadow(0 0 30px rgba(255,79,183,0.18));
 }
 
-/* (Se deja por compat, aunque ya no existe en HTML) */
+
 .arkana-title {
   margin: 0;
   font-family: Orbitron, sans-serif;
@@ -71,7 +71,7 @@ html, body {
   animation: pulse 2s ease-in-out infinite;
 }
 
-/* Scorecard (ya no existe; se deja por compat y por si lo reactivás) */
+
 .ui-scorecard {
   position: absolute;
   top: 54px;
@@ -117,7 +117,7 @@ html, body {
 }
 .muted { color: rgba(0,229,255,0.45); }
 
-/* BIG overlays */
+
 .big-overlay {
   position: absolute;
   top: 33%;
@@ -159,7 +159,7 @@ html, body {
 
 .hidden { display: none !important; }
 
-/* Power panel */
+
 .ui-power {
   position: absolute;
   left: 14px;
@@ -177,7 +177,7 @@ html, body {
   box-shadow: 0 0 15px rgba(0,229,255,0.2);
 }
 
-/* ✅ CAMBIO: barra de power mucho más fina (panel más angosto) */
+
 .ui-power .panel{
   width: 58px;
   padding: 8px;
@@ -194,7 +194,7 @@ html, body {
   margin-bottom: 8px;
 }
 
-/* ✅ CAMBIO: track más angosto y un poquito menos alto */
+
 .ui-power .power-track{
   height: 190px;
   border-radius: 10px;
@@ -243,13 +243,13 @@ html, body {
   font-size: 18px;
 }
 
-/* ✅ CAMBIO: texto % más chico para panel fino */
+
 .ui-power .panel-big{
   font-size: 14px;
   margin-top: 6px;
 }
 
-/* Direction control */
+
 .ui-direction {
   position: absolute;
   bottom: 120px;
@@ -305,7 +305,7 @@ html, body {
 .dir-label.left { left: 12px; }
 .dir-label.right { right: 12px; }
 
-/* Buttons */
+
 .ui-launch {
   position: absolute;
   bottom: 60px;
@@ -346,7 +346,7 @@ html, body {
   opacity: 0.9;
 }
 
-/* Reset (ya no existe; se deja por compat) */
+
 .ui-reset {
   position: absolute;
   top: 12px;
@@ -369,7 +369,7 @@ html, body {
   color: rgba(0,229,255,1);
 }
 
-/* Instructions */
+
 .ui-instructions {
   position: absolute;
   bottom: 12px;
@@ -386,7 +386,7 @@ html, body {
   font-size: 11px;
 }
 
-/* Decorative chips (ya no existen; se dejan por compat) */
+
 .chips-left, .chips-right {
   position: absolute;
   top: 92px;
@@ -420,7 +420,7 @@ html, body {
 .chip.yellow { background: #eab308; }
 .chip.pink { background: #ec4899; }
 
-/* Loading screen */
+
 .loading {
   position: absolute;
   inset: 0;
@@ -521,7 +521,7 @@ html, body {
 .d2 { animation-delay: 0.15s; }
 .d3 { animation-delay: 0.3s; }
 
-/* Corners */
+
 .corner {
   position: absolute;
   width: 52px;
@@ -555,15 +555,13 @@ html, body {
 }
 
 @media (min-width: 768px) {
-  /* ✅ Ajustes también en desktop */
+
   .ui-power .panel { width: 66px; padding: 10px; }
   .ui-power { left: 18px; }
   .ui-direction { bottom: 128px; height: 62px; }
 }
 
-/* =========================================================
-   CASINO BEACH AT SUNSET (UI) — override final
-========================================================= */
+
 
 :root{
   --sunGold:#ffb84a;
@@ -583,7 +581,7 @@ html, body {
   --txt2: rgba(255, 246, 230, 0.72);
 }
 
-/* Fondo general (por si se ve detrás del canvas) */
+
 html, body{
   background:
     radial-gradient(900px 650px at 50% 0%, rgba(255,79,183,0.18), transparent 60%),
@@ -593,7 +591,7 @@ html, body{
   color: var(--txt);
 }
 
-/* (Compat) */
+
 .arkana-title{
   color: #ffd7a0;
   letter-spacing: 0.18em;
@@ -603,7 +601,7 @@ html, body{
   filter: none;
 }
 
-/* Panel Power: borde cálido + “glass” */
+
 .panel{
   background: linear-gradient(180deg, rgba(28,10,22,0.72), rgba(10,6,18,0.72));
   border: 1px solid var(--strokeWarm);
@@ -617,7 +615,7 @@ html, body{
   text-shadow: 0 0 10px rgba(255,184,74,0.35);
 }
 
-/* Power track + fill “sunset” */
+
 .power-track{
   background: rgba(0,0,0,0.35);
   border: 1px solid rgba(255,184,74,0.22);
@@ -636,7 +634,7 @@ html, body{
   text-shadow: 0 0 12px rgba(255,184,74,0.35);
 }
 
-/* Direction control: marco dorado y glow */
+
 .dir-wrap{
   background: linear-gradient(180deg, rgba(28,10,22,0.68), rgba(10,6,18,0.68));
   border: 1px solid rgba(255,184,74,0.35);
@@ -654,7 +652,7 @@ html, body{
 
 .dir-label{ color: rgba(255,214,160,0.70); }
 
-/* Botón principal: turquesa→dorado */
+
 .btn-aiming{
   background: linear-gradient(90deg, rgba(34,211,238,0.95), rgba(255,184,74,0.92));
   box-shadow:
@@ -688,9 +686,6 @@ html, body{
   *{ animation: none !important; transition: none !important; }
 }
 
-/* =========================================================
-   CASINO BEACH PRELOADER — override (solo look)
-========================================================= */
 
 .loading{
   background:
@@ -783,10 +778,9 @@ html, body{
 
 
 
-/* “Ejemplo típico” recomendado para imágenes */
 img{ max-width: 100%; height: auto; display: block; }
 
-/* Variables default (tablet / general) */
+
 :root{
   --logoW: min(210px, 54vw); 
   --logoTop: -80px;          
