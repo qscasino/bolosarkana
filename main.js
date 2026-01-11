@@ -2,6 +2,46 @@ import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js";
 
 /* =========================
+   ✅ PERF: MODO MÓVIL / BAJO RECURSO
+   - Baja DPR + opcional dynamic res
+   - Limita FPS en móvil
+   - Reduce sombras/luces/geo
+   - Reduce costo de física (dt + substeps + sleep)
+========================= */
+const isMobile =
+  matchMedia("(max-width: 820px)").matches ||
+  /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+const PERF = {
+  mobile: isMobile,
+
+  // Render
+  dprCap: isMobile ? 1.0 : 2.0,
+  antialias: !isMobile,
+  targetFps: isMobile ? 30 : 60,
+  fogDensity: isMobile ? 0.020 : 0.028,
+
+  // Shadows
+  shadows: !isMobile, // ✅ off en mobile (gran mejora)
+  shadowMapSize: isMobile ? 1024 : 2048,
+
+  // Geometry (ball/pins/sky)
+  ballSeg: isMobile ? 24 : 64,
+  ballGlowSeg: isMobile ? 16 : 32,
+  pinLatheSeg: isMobile ? 20 : 48,
+  pinRingSeg: isMobile ? 18 : 48,
+  skySeg: isMobile ? 28 : 64,
+  bulbSeg: isMobile ? 10 : 16,
+
+  // Physics
+  fixedDt: isMobile ? 1 / 40 : 1 / 60,
+  maxSubsteps: isMobile ? 2 : 4,
+  solverIterations: isMobile ? 10 : 14,
+  solverTolerance: isMobile ? 0.002 : 0.001,
+  clampAccMax: isMobile ? 0.05 : 0.033,
+};
+
+/* =========================
    DOM + UI STATE
 ========================= */
 const $ = (id) => document.getElementById(id);
@@ -455,15 +495,22 @@ window.addEventListener("keydown", (e) => {
    THREE + CANNON SETUP
 ========================= */
 const container = $("three-container");
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+// ✅ antialias OFF en móvil
+const renderer = new THREE.WebGLRenderer({ antialias: PERF.antialias, alpha: false });
+
+// ✅ pixel ratio cap fuerte en móvil
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, PERF.dprCap));
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+// ✅ sombras OFF en móvil (gran boost)
+renderer.shadowMap.enabled = PERF.shadows;
+renderer.shadowMap.type = PERF.shadows ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap;
+
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x1a0630, 0.028);
+scene.fog = new THREE.FogExp2(0x1a0630, PERF.fogDensity);
 scene.background = null;
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
@@ -473,20 +520,21 @@ window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, PERF.dprCap));
 });
 
 // LIGHTING
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.08;
+renderer.toneMappingExposure = PERF.mobile ? 1.02 : 1.08;
 
-const hemi = new THREE.HemisphereLight(0xffb07a, 0x14061f, 0.55);
+const hemi = new THREE.HemisphereLight(0xffb07a, 0x14061f, PERF.mobile ? 0.45 : 0.55);
 scene.add(hemi);
 
-const sun = new THREE.DirectionalLight(0xffc48a, 1.2);
+const sun = new THREE.DirectionalLight(0xffc48a, PERF.mobile ? 1.0 : 1.2);
 sun.position.set(-6, 10, 8);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.castShadow = PERF.shadows;
+sun.shadow.mapSize.set(PERF.shadowMapSize, PERF.shadowMapSize);
 sun.shadow.camera.near = 1;
 sun.shadow.camera.far = 50;
 sun.shadow.camera.left = -12;
@@ -495,8 +543,11 @@ sun.shadow.camera.top = 12;
 sun.shadow.camera.bottom = -12;
 scene.add(sun);
 
+// ✅ en móvil: bajar intensidad/alcance de pointlights (menos costo)
 function neonPoint(x, y, z, color, intensity, dist){
-  const l = new THREE.PointLight(color, intensity, dist);
+  const i = PERF.mobile ? intensity * 0.6 : intensity;
+  const d = PERF.mobile ? dist * 0.75 : dist;
+  const l = new THREE.PointLight(color, i, d);
   l.position.set(x, y, z);
   scene.add(l);
   return l;
@@ -521,12 +572,18 @@ function makeCanvasTexture(w, h, draw) {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+
+  // ✅ anisotropy bajo en mobile
+  const maxAniso = renderer.capabilities.getMaxAnisotropy();
+  tex.anisotropy = PERF.mobile ? 2 : Math.min(8, maxAniso);
+
   return tex;
 }
 
 function makeSandTexture() {
-  return makeCanvasTexture(1024, 1024, (ctx, w, h) => {
+  // ✅ canvas texture más chica en móvil
+  const size = PERF.mobile ? 512 : 1024;
+  return makeCanvasTexture(size, size, (ctx, w, h) => {
     ctx.fillStyle = "#d8b27b";
     ctx.fillRect(0, 0, w, h);
 
@@ -541,7 +598,8 @@ function makeSandTexture() {
     ctx.putImageData(img, 0, 0);
 
     ctx.globalAlpha = 0.18;
-    for (let i = 0; i < 1200; i++) {
+    const dots = PERF.mobile ? 650 : 1200;
+    for (let i = 0; i < dots; i++) {
       const r = 0.8 + Math.random()*1.8;
       ctx.fillStyle = `rgba(90,60,30,${0.15 + Math.random()*0.25})`;
       ctx.beginPath();
@@ -553,7 +611,7 @@ function makeSandTexture() {
 }
 
 function addSunsetSkyDome(scene) {
-  const geo = new THREE.SphereGeometry(120, 64, 64);
+  const geo = new THREE.SphereGeometry(120, PERF.skySeg, PERF.skySeg);
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     transparent: false,
@@ -625,13 +683,16 @@ function addHorizonSilhouettes(scene) {
 
 function addStringLights(scene) {
   const bulbs = new THREE.Group();
-  const bulbGeo = new THREE.SphereGeometry(0.07, 16, 16);
+
+  const bulbGeo = new THREE.SphereGeometry(0.07, PERF.bulbSeg, PERF.bulbSeg);
 
   const a = new THREE.Vector3(-3.6, 3.4, -6);
   const b = new THREE.Vector3( 0.0, 4.1, -10);
   const c = new THREE.Vector3( 3.6, 3.2, -6);
 
-  const steps = 16;
+  // ✅ menos steps en móvil
+  const steps = PERF.mobile ? 10 : 16;
+
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const p = new THREE.Vector3().copy(a).multiplyScalar((1-t)*(1-t))
@@ -644,9 +705,12 @@ function addStringLights(scene) {
     bulb.position.copy(p);
     bulbs.add(bulb);
 
-    const l = new THREE.PointLight(warm ? 0xffb84a : 0x22d3ee, 0.35, 2.2);
-    l.position.copy(p);
-    bulbs.add(l);
+    // ✅ en móvil, luces puntuales “bulbs” apagadas (eran 17 pointlights)
+    if (!PERF.mobile) {
+      const l = new THREE.PointLight(warm ? 0xffb84a : 0x22d3ee, 0.35, 2.2);
+      l.position.copy(p);
+      bulbs.add(l);
+    }
   }
   scene.add(bulbs);
 }
@@ -665,38 +729,41 @@ function addBeachSidesWithProps(parent) {
   const sandL = new THREE.Mesh(new THREE.PlaneGeometry(6, 30), sandMat);
   sandL.rotation.x = -Math.PI / 2;
   sandL.position.set(-4.2, -0.09, -5);
-  sandL.receiveShadow = true;
+  sandL.receiveShadow = PERF.shadows;
   parent.add(sandL);
 
   const sandR = new THREE.Mesh(new THREE.PlaneGeometry(6, 30), sandMat);
   sandR.rotation.x = -Math.PI / 2;
   sandR.position.set( 4.2, -0.09, -5);
-  sandR.receiveShadow = true;
+  sandR.receiveShadow = PERF.shadows;
   parent.add(sandR);
 
-  scatterProps(parent, -4.2, -5);
-  scatterProps(parent,  4.2, -5);
+  // ✅ menos props en móvil
+  scatterProps(parent, -4.2, -5, PERF.mobile ? 6 : 10);
+  scatterProps(parent,  4.2, -5, PERF.mobile ? 6 : 10);
 }
 
-function scatterProps(parent, sideX, centerZ) {
+function scatterProps(parent, sideX, centerZ, count = 10) {
   const g = new THREE.Group();
   g.position.set(sideX, 0, 0);
 
   function chip(x, z, c1, c2){
-    const chipGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.06, 28);
+    const seg = PERF.mobile ? 16 : 28;
+    const chipGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.06, seg);
     const mat = new THREE.MeshStandardMaterial({ color: c1, roughness: 0.35, metalness: 0.25 });
     const top = new THREE.MeshStandardMaterial({ color: c2, roughness: 0.35, metalness: 0.25 });
 
     const m = new THREE.Mesh(chipGeo, mat);
     m.position.set(x, -0.02, z);
     m.rotation.y = Math.random()*Math.PI;
-    m.castShadow = true;
+    m.castShadow = PERF.shadows;
     g.add(m);
 
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.015, 10, 24), top);
+    const ringSeg = PERF.mobile ? 14 : 24;
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.015, 10, ringSeg), top);
     ring.position.copy(m.position);
     ring.rotation.set(Math.PI/2, 0, m.rotation.y);
-    ring.castShadow = true;
+    ring.castShadow = PERF.shadows;
     g.add(ring);
   }
 
@@ -707,7 +774,7 @@ function scatterProps(parent, sideX, centerZ) {
     );
     d.position.set(x, 0.02, z);
     d.rotation.set(Math.random()*0.6, Math.random()*Math.PI, Math.random()*0.6);
-    d.castShadow = true;
+    d.castShadow = PERF.shadows;
     g.add(d);
   }
 
@@ -721,7 +788,7 @@ function scatterProps(parent, sideX, centerZ) {
     g.add(m);
 
     const pip = new THREE.Mesh(
-      new THREE.CircleGeometry(0.06, 18),
+      new THREE.CircleGeometry(0.06, PERF.mobile ? 12 : 18),
       new THREE.MeshBasicMaterial({ color: Math.random() > 0.5 ? 0xff2d5f : 0x111111 })
     );
     pip.position.set(x + (Math.random()-0.5)*0.12, -0.019, z + (Math.random()-0.5)*0.12);
@@ -732,7 +799,7 @@ function scatterProps(parent, sideX, centerZ) {
   const zMin = centerZ - 13;
   const zMax = centerZ + 13;
 
-  for (let i = 0; i < 10; i++){
+  for (let i = 0; i < count; i++){
     const x = (Math.random()-0.5) * 2.2;
     const z = zMin + Math.random()*(zMax - zMin);
     const r = Math.random();
@@ -750,13 +817,17 @@ function scatterProps(parent, sideX, centerZ) {
 ========================= */
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.81, 0) });
 
-// ✅ clave: permitir sleep (evita caídas instantáneas al iniciar)
+// ✅ permitir sleep
 world.allowSleep = true;
 
-// un poco más estable
+// ✅ un poco más estable + barato en mobile
 world.broadphase = new CANNON.SAPBroadphase(world);
-world.solver.iterations = 14;
-world.solver.tolerance = 0.001;
+world.solver.iterations = PERF.solverIterations;
+world.solver.tolerance = PERF.solverTolerance;
+
+// ✅ Sleep tuning (más tolerante en mobile para “dormir” antes)
+world.sleepSpeedLimit = PERF.mobile ? 0.15 : 0.10;
+world.sleepTimeLimit  = PERF.mobile ? 0.7  : 0.45;
 
 const floorMat = new CANNON.Material("floor");
 const ballMat  = new CANNON.Material("ball");
@@ -854,8 +925,8 @@ const ballBody = new CANNON.Body({
 ballBody.addShape(new CANNON.Sphere(0.25));
 ballBody.position.set(0, 0.25, 7);
 ballBody.allowSleep = true;
-ballBody.sleepSpeedLimit = 0.1;
-ballBody.sleepTimeLimit = 0.4;
+ballBody.sleepSpeedLimit = PERF.mobile ? 0.16 : 0.1;
+ballBody.sleepTimeLimit = PERF.mobile ? 0.7 : 0.4;
 world.addBody(ballBody);
 
 let ballHasThrown = false;
@@ -890,7 +961,6 @@ function applyBackShock(primaryPin) {
   const speed = Math.hypot(v.x, v.y, v.z);
   if (speed < 2.0) return;
 
-  // centrado => más “strike probable”
   const centerFactor = 1 - clamp(Math.abs(ballBody.position.x) / 0.95, 0, 1);
   const baseMag = (2.0 + speed * 0.22) * (0.85 + power * 0.55) * (0.75 + centerFactor * 0.65);
 
@@ -944,7 +1014,6 @@ function clampPinsMotion() {
     const v = pin.body.velocity;
     const w = pin.body.angularVelocity;
 
-    // no “disparo” hacia adelante (z positivo)
     if (v.z > 1.6) v.z = 1.6;
 
     v.x = clamp(v.x, -6.0, 6.0);
@@ -972,7 +1041,6 @@ function plantPinsStanding() {
     pin.body.angularVelocity.set(0, 0, 0);
     pin.body.quaternion.set(0, 0, 0, 1);
 
-    // quedan durmiendo, se despiertan con choque
     pin.body.sleep();
   }
 }
@@ -1052,7 +1120,6 @@ function onThrowComplete() {
       if (attemptNumber === 1) showStrike();
       else showSpare();
 
-      // ✅ strike => bloqueado + guardado
       lockGameWithReward(bonus, attemptNumber);
 
       showRewardModal(
@@ -1191,11 +1258,14 @@ function resetPins() {
 }
 
 /* =========================
-   ANIMATION LOOP
+   ANIMATION LOOP (✅ FPS LIMIT + ✅ dt/substeps mobile)
 ========================= */
 let lastT = performance.now();
 let acc = 0;
-const fixedDt = 1 / 60;
+
+// ✅ FPS cap
+let lastRenderMs = 0;
+const minFrameMs = 1000 / PERF.targetFps;
 
 refreshLaunchButton();
 updateScoreUI();
@@ -1220,15 +1290,27 @@ if (gameLocked && savedReward) {
 
 function animate(t) {
   requestAnimationFrame(animate);
-  const dt = Math.min(0.033, (t - lastT) / 1000);
+
+  // ✅ limitar FPS en móvil
+  if (PERF.mobile) {
+    const ms = t;
+    if (ms - lastRenderMs < minFrameMs) return;
+    lastRenderMs = ms;
+  }
+
+  const dt = Math.min(PERF.clampAccMax, (t - lastT) / 1000);
   lastT = t;
   acc += dt;
 
-  while (acc >= fixedDt) {
-    world.step(fixedDt);
+  let sub = 0;
+  while (acc >= PERF.fixedDt && sub < PERF.maxSubsteps) {
+    world.step(PERF.fixedDt);
     clampPinsMotion();
-    acc -= fixedDt;
+    acc -= PERF.fixedDt;
+    sub++;
   }
+  // evita “espiral de muerte” si se atrasa el frame
+  acc = Math.min(acc, PERF.fixedDt);
 
   if (gameState === "throwing" && ballHasThrown && !ballCaptured && shouldCaptureBall()) {
     captureBall();
@@ -1284,7 +1366,7 @@ function buildLane(parent) {
   const lane = new THREE.Mesh(new THREE.PlaneGeometry(2, 28), laneMat);
   lane.rotation.x = -Math.PI / 2;
   lane.position.set(0, 0.01, -5);
-  lane.receiveShadow = true;
+  lane.receiveShadow = PERF.shadows;
   parent.add(lane);
 
   const lineMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, transparent: true, opacity: 0.5 });
@@ -1298,7 +1380,7 @@ function buildLane(parent) {
 
   const dotMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
   [-0.4, -0.2, 0, 0.2, 0.4].forEach((x) => {
-    const d = new THREE.Mesh(new THREE.CircleGeometry(0.03, 16), dotMat);
+    const d = new THREE.Mesh(new THREE.CircleGeometry(0.03, PERF.mobile ? 10 : 16), dotMat);
     d.rotation.x = -Math.PI / 2;
     d.position.set(x, 0.02, 5);
     parent.add(d);
@@ -1315,12 +1397,12 @@ function buildLane(parent) {
     const g = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 28), gutterMat);
     g.rotation.x = -Math.PI / 2;
     g.position.set(x, -0.08, -5);
-    g.receiveShadow = true;
+    g.receiveShadow = PERF.shadows;
     parent.add(g);
 
     const edge = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.1, 28), edgeMat);
     edge.position.set(x + (i === 0 ? 0.15 : -0.15), 0, -5);
-    edge.castShadow = true;
+    edge.castShadow = PERF.shadows;
     parent.add(edge);
   });
 
@@ -1330,14 +1412,14 @@ function buildLane(parent) {
   );
   deck.rotation.x = -Math.PI / 2;
   deck.position.set(0, 0.015, -15.75);
-  deck.receiveShadow = true;
+  deck.receiveShadow = PERF.shadows;
   parent.add(deck);
 
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x0a0a15 });
   [-2.5, 2.5].forEach((x) => {
     const w = new THREE.Mesh(new THREE.BoxGeometry(0.5, 3, 30), wallMat);
     w.position.set(x, 1.5, -5);
-    w.receiveShadow = true;
+    w.receiveShadow = PERF.shadows;
     parent.add(w);
   });
 }
@@ -1351,7 +1433,7 @@ function buildSideNeonRails(parent) {
       new THREE.MeshStandardMaterial({ color: 0x111122, metalness: 0.8, roughness: 0.2 })
     );
     main.position.set(x, 0.5, -5);
-    main.castShadow = true;
+    main.castShadow = PERF.shadows;
     rail.add(main);
 
     const strip = new THREE.Mesh(
@@ -1359,7 +1441,7 @@ function buildSideNeonRails(parent) {
       new THREE.MeshStandardMaterial({
         color: 0x06121a,
         emissive: 0x22d3ee,
-        emissiveIntensity: 2.4,
+        emissiveIntensity: PERF.mobile ? 1.6 : 2.4,
         roughness: 0.25,
         metalness: 0.2
       })
@@ -1369,13 +1451,15 @@ function buildSideNeonRails(parent) {
 
     const glow = new THREE.Mesh(
       new THREE.BoxGeometry(0.2, 0.8, 27.5),
-      new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending })
+      new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: PERF.mobile ? 0.10 : 0.15, blending: THREE.AdditiveBlending })
     );
     glow.position.set(x + (i === 0 ? 0.1 : -0.1), 0.3, -5);
     rail.add(glow);
 
-    [-10, -5, 0, 5].forEach((z) => {
-      const pl = new THREE.PointLight(0x00e5ff, 0.8, 4);
+    // ✅ en móvil: menos pointlights en rails
+    const zs = PERF.mobile ? [-10, 0] : [-10, -5, 0, 5];
+    zs.forEach((z) => {
+      const pl = new THREE.PointLight(0x00e5ff, PERF.mobile ? 0.45 : 0.8, PERF.mobile ? 3.2 : 4);
       pl.position.set(x + (i === 0 ? 0.2 : -0.2), 0.3, z);
       rail.add(pl);
     });
@@ -1394,13 +1478,13 @@ function buildBackArch(parent) {
   [-1.5, 1.5].forEach((x) => {
     const p = new THREE.Mesh(new THREE.BoxGeometry(0.25, 3, 0.25), mat);
     p.position.set(x, 1.5, 0);
-    p.castShadow = true;
+    p.castShadow = PERF.shadows;
     group.add(p);
   });
 
   const top = new THREE.Mesh(new THREE.BoxGeometry(3.25, 0.2, 0.25), mat);
   top.position.set(0, 3, 0);
-  top.castShadow = true;
+  top.castShadow = PERF.shadows;
   group.add(top);
 
   const neonTop = new THREE.Mesh(new THREE.BoxGeometry(3.3, 0.05, 0.02), neon);
@@ -1415,7 +1499,7 @@ function buildBackArch(parent) {
 
   const wall = new THREE.Mesh(new THREE.BoxGeometry(4, 3.5, 0.1), new THREE.MeshStandardMaterial({ color: 0x050510 }));
   wall.position.set(0, 1.5, -0.3);
-  wall.receiveShadow = true;
+  wall.receiveShadow = PERF.shadows;
   group.add(wall);
 
   parent.add(group);
@@ -1441,23 +1525,26 @@ function makeChipStack(pos, colors) {
   const g = new THREE.Group();
   g.position.set(...pos);
 
+  const seg = PERF.mobile ? 16 : 32;
+  const torSeg = PERF.mobile ? 18 : 32;
+
   colors.forEach((c, i) => {
     const chip = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15, 0.15, 0.05, 32),
+      new THREE.CylinderGeometry(0.15, 0.15, 0.05, seg),
       new THREE.MeshStandardMaterial({ color: c, metalness: 0.3, roughness: 0.4 })
     );
     chip.position.set(0, 0.03 + i * 0.06, 0);
     chip.rotation.y = i * 0.5;
-    chip.castShadow = true;
+    chip.castShadow = PERF.shadows;
     g.add(chip);
 
     const edge = new THREE.Mesh(
-      new THREE.TorusGeometry(0.14, 0.012, 8, 32),
+      new THREE.TorusGeometry(0.14, 0.012, 8, torSeg),
       new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 0.7, roughness: 0.2 })
     );
     edge.position.copy(chip.position);
     edge.rotation.set(Math.PI / 2, 0, chip.rotation.y);
-    edge.castShadow = true;
+    edge.castShadow = PERF.shadows;
     g.add(edge);
   });
 
@@ -1470,21 +1557,21 @@ function makePalm(pos, scale = 1) {
   g.scale.setScalar(scale);
 
   const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 0.12, 2.4, 8),
+    new THREE.CylinderGeometry(0.08, 0.12, 2.4, PERF.mobile ? 6 : 8),
     new THREE.MeshStandardMaterial({ color: 0x5d4037, roughness: 0.9 })
   );
   trunk.position.set(0, 1.2, 0);
-  trunk.castShadow = true;
+  trunk.castShadow = PERF.shadows;
   g.add(trunk);
 
   [0.3, 0.7, 1.1, 1.5, 1.9].forEach((y, i) => {
     const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(0.1 - i * 0.005, 0.015, 8, 16),
+      new THREE.TorusGeometry(0.1 - i * 0.005, 0.015, 8, PERF.mobile ? 10 : 16),
       new THREE.MeshStandardMaterial({ color: 0x4e342e, roughness: 0.9 })
     );
     ring.position.set(0, y, 0);
     ring.rotation.x = Math.PI / 2;
-    ring.castShadow = true;
+    ring.castShadow = PERF.shadows;
     g.add(ring);
   });
 
@@ -1494,10 +1581,10 @@ function makePalm(pos, scale = 1) {
     fr.position.set(0, 2.3, 0);
     fr.rotation.set(0.6, (angle * Math.PI) / 180, 0);
 
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.15, 1.2, 4), frondMat);
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.15, 1.2, PERF.mobile ? 3 : 4), frondMat);
     cone.position.set(0, 0.4, 0);
     cone.rotation.x = 0.3;
-    cone.castShadow = true;
+    cone.castShadow = PERF.shadows;
     fr.add(cone);
     g.add(fr);
   });
@@ -1507,9 +1594,9 @@ function makePalm(pos, scale = 1) {
     [0.08, 2.15, 0.05],
     [-0.06, 2.12, -0.08],
   ].forEach((p) => {
-    const c = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 12), cocoMat);
+    const c = new THREE.Mesh(new THREE.SphereGeometry(0.06, PERF.mobile ? 8 : 12, PERF.mobile ? 8 : 12), cocoMat);
     c.position.set(...p);
-    c.castShadow = true;
+    c.castShadow = PERF.shadows;
     g.add(c);
   });
 
@@ -1521,36 +1608,37 @@ function makeTorch(pos) {
   group.position.set(...pos);
 
   const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.04, 0.05, 1.4, 8),
+    new THREE.CylinderGeometry(0.04, 0.05, 1.4, PERF.mobile ? 6 : 8),
     new THREE.MeshStandardMaterial({ color: 0x8d6e63, roughness: 0.8 })
   );
   pole.position.set(0, 0.7, 0);
-  pole.castShadow = true;
+  pole.castShadow = PERF.shadows;
   group.add(pole);
 
   const basket = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 0.06, 0.12, 8),
+    new THREE.CylinderGeometry(0.08, 0.06, 0.12, PERF.mobile ? 6 : 8),
     new THREE.MeshStandardMaterial({ color: 0x3e2723, roughness: 0.9 })
   );
   basket.position.set(0, 1.45, 0);
-  basket.castShadow = true;
+  basket.castShadow = PERF.shadows;
   group.add(basket);
 
   const flame = new THREE.Mesh(
-    new THREE.ConeGeometry(0.06, 0.2, 8),
+    new THREE.ConeGeometry(0.06, 0.2, PERF.mobile ? 6 : 8),
     new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.9 })
   );
   flame.position.set(0, 1.6, 0);
   group.add(flame);
 
   const inner = new THREE.Mesh(
-    new THREE.ConeGeometry(0.03, 0.12, 8),
+    new THREE.ConeGeometry(0.03, 0.12, PERF.mobile ? 6 : 8),
     new THREE.MeshBasicMaterial({ color: 0xffff00 })
   );
   inner.position.set(0, 1.58, 0);
   group.add(inner);
 
-  const light = new THREE.PointLight(0xff6622, 1.5, 4);
+  // ✅ luz de antorcha más barata en móvil
+  const light = new THREE.PointLight(0xff6622, PERF.mobile ? 1.0 : 1.5, PERF.mobile ? 3 : 4);
   light.position.set(0, 1.6, 0);
   group.add(light);
 
@@ -1561,7 +1649,7 @@ function updateTorches(time) {
   for (const t of torches) {
     const flicker = Math.sin(time * 10) * 0.1 + Math.sin(time * 15) * 0.05;
     t.flame.scale.y = 1 + flicker;
-    t.light.intensity = 1.5 + flicker * 2;
+    t.light.intensity = (PERF.mobile ? 1.0 : 1.5) + flicker * 2;
   }
 }
 
@@ -1569,44 +1657,48 @@ function createElectricBall() {
   const group = new THREE.Group();
 
   const main = new THREE.Mesh(
-    new THREE.SphereGeometry(0.25, 64, 64),
+    new THREE.SphereGeometry(0.25, PERF.ballSeg, PERF.ballSeg),
     new THREE.MeshStandardMaterial({ color: 0x0066cc, metalness: 0.9, roughness: 0.1, envMapIntensity: 1 })
   );
-  main.castShadow = true;
+  main.castShadow = PERF.shadows;
   group.add(main);
 
   const glow = new THREE.Mesh(
-    new THREE.SphereGeometry(0.25, 32, 32),
-    new THREE.MeshBasicMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending })
+    new THREE.SphereGeometry(0.25, PERF.ballGlowSeg, PERF.ballGlowSeg),
+    new THREE.MeshBasicMaterial({ color: 0x00d4ff, transparent: true, opacity: PERF.mobile ? 0.28 : 0.4, blending: THREE.AdditiveBlending })
   );
   glow.scale.setScalar(1.1);
   group.add(glow);
 
   const inner = new THREE.Mesh(
-    new THREE.SphereGeometry(0.25, 32, 32),
-    new THREE.MeshBasicMaterial({ color: 0x0088ff, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending })
+    new THREE.SphereGeometry(0.25, PERF.ballGlowSeg, PERF.ballGlowSeg),
+    new THREE.MeshBasicMaterial({ color: 0x0088ff, transparent: true, opacity: PERF.mobile ? 0.45 : 0.6, blending: THREE.AdditiveBlending })
   );
   inner.scale.setScalar(1.05);
   group.add(inner);
 
   const rings = [];
-  for (let i = 0; i < 6; i++) {
+  const ringCount = PERF.mobile ? 4 : 6;
+  const ringSeg = PERF.mobile ? 18 : 32;
+
+  for (let i = 0; i < ringCount; i++) {
     const r = new THREE.Mesh(
-      new THREE.TorusGeometry(0.25, 0.008, 8, 32, Math.PI * 0.6),
-      new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending })
+      new THREE.TorusGeometry(0.25, 0.008, 8, ringSeg, Math.PI * 0.6),
+      new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: PERF.mobile ? 0.65 : 0.8, blending: THREE.AdditiveBlending })
     );
     r.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
     rings.push(r);
     group.add(r);
   }
 
-  const pl = new THREE.PointLight(0x00d4ff, 2, 3);
+  // ✅ pointlight de la bola más leve en mobile
+  const pl = new THREE.PointLight(0x00d4ff, PERF.mobile ? 1.2 : 2, PERF.mobile ? 2.2 : 3);
   group.add(pl);
 
   function update(time) {
     const pulse = Math.sin(time * 8) * 0.2 + 0.8;
     glow.scale.setScalar(1 + pulse * 0.15);
-    rings.forEach((r, i) => (r.rotation.z += 0.01 + i * 0.0007));
+    rings.forEach((r, i) => (r.rotation.z += (PERF.mobile ? 0.007 : 0.01) + i * 0.0007));
   }
 
   return { group, update };
@@ -1615,13 +1707,16 @@ function createElectricBall() {
 function createPin(id, pos) {
   const group = new THREE.Group();
 
-  const whiteMat = new THREE.MeshPhysicalMaterial({
-    color: 0xfaf7f2,
-    roughness: 0.22,
-    metalness: 0.0,
-    clearcoat: 0.9,
-    clearcoatRoughness: 0.12,
-  });
+  // ✅ en mobile: menos “physical material”
+  const whiteMat = PERF.mobile
+    ? new THREE.MeshStandardMaterial({ color: 0xfaf7f2, roughness: 0.28, metalness: 0.0 })
+    : new THREE.MeshPhysicalMaterial({
+        color: 0xfaf7f2,
+        roughness: 0.22,
+        metalness: 0.0,
+        clearcoat: 0.9,
+        clearcoatRoughness: 0.12,
+      });
 
   const redMat = new THREE.MeshStandardMaterial({
     color: 0xd1162a,
@@ -1646,53 +1741,51 @@ function createPin(id, pos) {
     new THREE.Vector2(0.050, y0 + 1.00 * h),
   ];
 
-  const geo = new THREE.LatheGeometry(profile, 48);
+  const geo = new THREE.LatheGeometry(profile, PERF.pinLatheSeg);
   geo.computeVertexNormals();
 
   const pinMesh = new THREE.Mesh(geo, whiteMat);
-  pinMesh.castShadow = true;
+  pinMesh.castShadow = PERF.shadows;
   group.add(pinMesh);
 
   const ringRadius = 0.085;
   const ringTube = 0.0075;
 
   const ring1 = new THREE.Mesh(
-    new THREE.TorusGeometry(ringRadius, ringTube, 10, 48),
+    new THREE.TorusGeometry(ringRadius, ringTube, 10, PERF.pinRingSeg),
     redMat
   );
   ring1.rotation.x = Math.PI / 2;
   ring1.position.y = y0 + 0.70 * h;
-  ring1.castShadow = true;
+  ring1.castShadow = PERF.shadows;
   group.add(ring1);
 
   const ring2 = new THREE.Mesh(
-    new THREE.TorusGeometry(ringRadius * 0.97, ringTube, 10, 48),
+    new THREE.TorusGeometry(ringRadius * 0.97, ringTube, 10, PERF.pinRingSeg),
     redMat
   );
   ring2.rotation.x = Math.PI / 2;
   ring2.position.y = y0 + 0.75 * h;
-  ring2.castShadow = true;
+  ring2.castShadow = PERF.shadows;
   group.add(ring2);
 
   const pinBody = new CANNON.Body({
     mass: 1.6,
     material: pinMat,
-    linearDamping: 0.45,
-    angularDamping: 0.45,
+    linearDamping: PERF.mobile ? 0.55 : 0.45,
+    angularDamping: PERF.mobile ? 0.55 : 0.45,
     position: new CANNON.Vec3(pos[0], pos[1] + PIN_STAND_Y_EPS, pos[2]),
   });
 
-  // ✅ sleep para estabilidad inicial
   pinBody.allowSleep = true;
-  pinBody.sleepSpeedLimit = 0.12;
-  pinBody.sleepTimeLimit = 0.45;
+  pinBody.sleepSpeedLimit = PERF.mobile ? 0.16 : 0.12;
+  pinBody.sleepTimeLimit = PERF.mobile ? 0.75 : 0.45;
 
-  const shape = new CANNON.Cylinder(PIN_R_TOP, PIN_R_BOTTOM, PIN_HEIGHT, 14);
+  const shape = new CANNON.Cylinder(PIN_R_TOP, PIN_R_BOTTOM, PIN_HEIGHT, PERF.mobile ? 10 : 14);
   const q = new CANNON.Quaternion();
   q.setFromEuler(Math.PI / 2, 0, 0);
   pinBody.addShape(shape, new CANNON.Vec3(0, 0, 0), q);
 
-  // arrancan durmiendo
   pinBody.sleep();
 
   return {
@@ -1710,14 +1803,14 @@ function createAimIndicator() {
   const g = new THREE.Group();
 
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.15, 0.2, 32),
+    new THREE.RingGeometry(0.15, 0.2, PERF.mobile ? 18 : 32),
     new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
   );
   ring.rotation.x = -Math.PI / 2;
   g.add(ring);
 
   const arrow = new THREE.Mesh(
-    new THREE.ConeGeometry(0.1, 0.3, 3),
+    new THREE.ConeGeometry(0.1, 0.3, PERF.mobile ? 3 : 3),
     new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.6 })
   );
   arrow.position.set(0, 0.01, -0.4);
