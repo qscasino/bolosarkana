@@ -1,39 +1,24 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js";
 
-/* =========================
-   ✅ PERF: MODO MÓVIL / BAJO RECURSO
-   - Baja DPR + opcional dynamic res
-   - Limita FPS en móvil
-   - Reduce sombras/luces/geo
-   - Reduce costo de física (dt + substeps + sleep)
-========================= */
 const isMobile =
   matchMedia("(max-width: 820px)").matches ||
   /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 const PERF = {
   mobile: isMobile,
-
-  // Render
   dprCap: isMobile ? 1.0 : 2.0,
   antialias: !isMobile,
   targetFps: isMobile ? 30 : 60,
   fogDensity: isMobile ? 0.020 : 0.028,
-
-  // Shadows
-  shadows: !isMobile, // ✅ off en mobile (gran mejora)
+  shadows: !isMobile,
   shadowMapSize: isMobile ? 1024 : 2048,
-
-  // Geometry (ball/pins/sky)
   ballSeg: isMobile ? 24 : 64,
   ballGlowSeg: isMobile ? 16 : 32,
   pinLatheSeg: isMobile ? 20 : 48,
   pinRingSeg: isMobile ? 18 : 48,
   skySeg: isMobile ? 28 : 64,
   bulbSeg: isMobile ? 10 : 16,
-
-  // Physics
   fixedDt: isMobile ? 1 / 40 : 1 / 60,
   maxSubsteps: isMobile ? 2 : 4,
   solverIterations: isMobile ? 10 : 14,
@@ -41,33 +26,33 @@ const PERF = {
   clampAccMax: isMobile ? 0.05 : 0.033,
 };
 
-/* =========================
-   DOM + UI STATE
-========================= */
 const $ = (id) => document.getElementById(id);
 
-// ⚠️ Estos ya no existen en el HTML nuevo (scorecard eliminado)
 const elScore = $("score-value");
 const elFrame = $("frame-value");
-const elBall  = $("ball-value");
+const elBall = $("ball-value");
 
 const elLaunch = $("launch-btn");
 
-const elPowerFill   = $("power-fill");
-const elPowerGlow   = $("power-glow");
-const elPowerPct    = $("power-percent");
-const elDirCtrl     = $("direction-control");
-const elDirInd      = $("direction-indicator");
-const elStrike      = $("strike-overlay");
-const elSpare       = $("spare-overlay");
-const elInstr       = $("instructions");
-const elLoading     = $("loading-screen");
+const elPowerFill = $("power-fill");
+const elPowerGlow = $("power-glow");
+const elPowerPct = $("power-percent");
+const elDirCtrl = $("direction-control");
+const elDirInd = $("direction-indicator");
+const elStrike = $("strike-overlay");
+const elSpare = $("spare-overlay");
+const elInstr = $("instructions");
+const elLoading = $("loading-screen");
 const elLoadingFill = $("loading-bar-fill");
 
-let gameState = "aiming"; // aiming | charging | throwing | waiting | resetting | locked
-let direction = 0; // -1..1
-let power = 0; // 0..1 (final)
-let powerPct = 0; // 0..100 (UI)
+const gameContainerEl = document.getElementById("game-container");
+const introScreen = document.getElementById("intro-screen");
+const gameUI = document.getElementById("game-ui");
+
+let gameState = "aiming";
+let direction = 0;
+let power = 0;
+let powerPct = 0;
 let isCharging = false;
 let powerDir = 1;
 let powerTimer = null;
@@ -79,15 +64,169 @@ let throwsInFrame = 0;
 let pinsDownLastThrow = 0;
 let totalPinsThisFrame = 0;
 
-function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function clamp(v, a, b) {
+  return Math.max(a, Math.min(b, v));
+}
 
-/* =========================
-   ✅ BLOQUEO + PREMIO PERSISTENTE
-========================= */
+const AUDIO_URLS = {
+  charge: "./assets/audio/charge.mp3",
+  throw: "./assets/audio/throw.mp3",
+  hit: "./assets/audio/hit.mp3",
+  strike: "./assets/audio/strike.mp3",
+  spare: "./assets/audio/spare.mp3",
+  reward: "./assets/audio/reward.mp3",
+  fail: "./assets/audio/fail.mp3",
+  ambient: "./assets/audio/ambient.mp3",
+};
+
+const AudioSys = (() => {
+  const buffers = new Map();
+  let ctx = null;
+  let master = null;
+  let sfx = null;
+  let music = null;
+  let unlocked = false;
+  let musicSrc = null;
+
+  const state = {
+    master: 0.9,
+    sfx: 0.95,
+    music: 0.35,
+    enabled: true,
+  };
+
+  async function ensure() {
+    if (ctx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    ctx = new AC();
+    master = ctx.createGain();
+    sfx = ctx.createGain();
+    music = ctx.createGain();
+    master.gain.value = state.master;
+    sfx.gain.value = state.sfx;
+    music.gain.value = state.music;
+    sfx.connect(master);
+    music.connect(master);
+    master.connect(ctx.destination);
+  }
+
+  async function decode(url) {
+    try {
+      const res = await fetch(url, { cache: "force-cache" });
+      const arr = await res.arrayBuffer();
+      await ensure();
+      if (!ctx) return null;
+      const buf = await ctx.decodeAudioData(arr);
+      return buf;
+    } catch {
+      return null;
+    }
+  }
+
+  async function load(name) {
+    if (buffers.has(name)) return buffers.get(name);
+    const url = AUDIO_URLS[name];
+    if (!url) return null;
+    const buf = await decode(url);
+    if (buf) buffers.set(name, buf);
+    return buf;
+  }
+
+  async function preload() {
+    const names = Object.keys(AUDIO_URLS);
+    for (const n of names) await load(n);
+  }
+
+  async function unlock() {
+    if (!state.enabled) return;
+    await ensure();
+    if (!ctx) return;
+    try {
+      if (ctx.state !== "running") await ctx.resume();
+    } catch {}
+    unlocked = ctx && ctx.state === "running";
+    if (unlocked) {
+      preload();
+      startAmbient();
+    }
+  }
+
+  function setVolumes({ master: m, sfx: s, music: mu } = {}) {
+    if (typeof m === "number") state.master = clamp(m, 0, 1);
+    if (typeof s === "number") state.sfx = clamp(s, 0, 1);
+    if (typeof mu === "number") state.music = clamp(mu, 0, 1);
+    if (master) master.gain.value = state.master;
+    if (sfx) sfx.gain.value = state.sfx;
+    if (music) music.gain.value = state.music;
+  }
+
+  function stopAmbient() {
+    if (musicSrc) {
+      try {
+        musicSrc.stop();
+      } catch {}
+      musicSrc.disconnect();
+      musicSrc = null;
+    }
+  }
+
+  async function startAmbient() {
+    if (!AUDIO_URLS.ambient) return;
+    if (!unlocked || !ctx || !state.enabled) return;
+    if (musicSrc) return;
+    const buf = buffers.get("ambient") || (await load("ambient"));
+    if (!buf) return;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const g = ctx.createGain();
+    g.gain.value = 1.0;
+    src.connect(g);
+    g.connect(music);
+    try {
+      src.start();
+      musicSrc = src;
+    } catch {}
+  }
+
+  function play(name, { volume = 1, rate = 1, detune = 0 } = {}) {
+    if (!state.enabled) return;
+    if (!unlocked || !ctx) return;
+    const buf = buffers.get(name);
+    if (!buf) {
+      load(name);
+      return;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = clamp(rate, 0.25, 3);
+    if (detune) src.detune.value = detune;
+    const g = ctx.createGain();
+    g.gain.value = clamp(volume, 0, 1);
+    src.connect(g);
+    g.connect(sfx);
+    try {
+      src.start();
+    } catch {}
+    return src;
+  }
+
+  return { unlock, play, preload, setVolumes, stopAmbient, startAmbient, isUnlocked: () => unlocked };
+})();
+
+const unlockOnce = () => AudioSys.unlock();
+window.addEventListener("pointerdown", unlockOnce, { once: true, passive: true });
+window.addEventListener("keydown", unlockOnce, { once: true });
+
 const REWARD_KEY = "qs_bowling_reward_v1";
 
 function safeLocalStorage() {
-  try { return window.localStorage; } catch { return null; }
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
 }
 function loadSavedReward() {
   const ls = safeLocalStorage();
@@ -98,43 +237,38 @@ function loadSavedReward() {
     const data = JSON.parse(raw);
     if (!data || typeof data.bonus !== "number") return null;
     return data;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 function saveReward(bonus, attemptNumber) {
   const ls = safeLocalStorage();
   if (!ls) return;
   const payload = { bonus, attemptNumber, ts: Date.now() };
-  try { ls.setItem(REWARD_KEY, JSON.stringify(payload)); } catch {}
+  try {
+    ls.setItem(REWARD_KEY, JSON.stringify(payload));
+  } catch {}
 }
 
 let savedReward = loadSavedReward();
 let gameLocked = !!savedReward;
 
-/* =========================
-   3 INTENTOS + CAPTURA BOLA
-========================= */
 const MAX_ATTEMPTS = 3;
 let attemptsUsed = 0;
 let knockedBeforeThrow = 0;
 let throwResolved = false;
 let ballCaptured = false;
 
-// Zona “cuadrado negro”
 const CAPTURE_Z = -18.2;
 const OOB_X = 3.0;
 const OOB_Y_HIGH = 3.2;
 const OOB_Y_LOW = -2.0;
 
-// Detección “pin caído”
 const KNOCK_TILT = 0.75;
-const KNOCK_Y    = 0.18;
+const KNOCK_Y = 0.18;
 
-// ✅ Estabilización (para que NO se caigan solos al iniciar)
 const PIN_STAND_Y_EPS = 0.003;
 
-/* =========================
-   MODAL
-========================= */
 function ensureRewardModal() {
   if (document.getElementById("reward-modal")) return;
 
@@ -245,42 +379,26 @@ function bonusByAttempt(attemptNumber) {
   return 100;
 }
 
-/* =========================
-   BOLA: CAPTURAR / OCULTAR
-========================= */
 function shouldCaptureBall() {
   const p = ballBody.position;
-  return (
-    p.z < CAPTURE_Z ||
-    Math.abs(p.x) > OOB_X ||
-    p.y > OOB_Y_HIGH ||
-    p.y < OOB_Y_LOW
-  );
+  return p.z < CAPTURE_Z || Math.abs(p.x) > OOB_X || p.y > OOB_Y_HIGH || p.y < OOB_Y_LOW;
 }
 
 function captureBall() {
   if (ballCaptured) return;
   ballCaptured = true;
-
   ball.group.visible = false;
-
   ballBody.velocity.set(0, 0, 0);
   ballBody.angularVelocity.set(0, 0, 0);
   ballBody.collisionResponse = false;
-
   ballBody.position.set(0, -50, -30);
 }
 
-/* =========================
-   PIN CAÍDO / RETIRAR
-========================= */
 function finalizeKnockDetection() {
   for (const pin of pins) {
     if (pin.isRemoved || pin.isKnocked) continue;
-
     const euler = new THREE.Euler().setFromQuaternion(pin.group.quaternion, "XYZ");
     const tilt = Math.abs(euler.x) + Math.abs(euler.z);
-
     if (tilt > KNOCK_TILT || pin.body.position.y < KNOCK_Y) {
       pin.isKnocked = true;
       knockedSet.add(pin.id);
@@ -291,7 +409,6 @@ function finalizeKnockDetection() {
 function retirePin(pin) {
   if (pin.isRemoved) return;
   pin.isRemoved = true;
-
   pin.group.visible = false;
   if (pin.body.world) world.removeBody(pin.body);
 }
@@ -303,27 +420,22 @@ function retireKnockedPins() {
   }
 }
 
-/* =========================
-   STATE HELPERS
-========================= */
 function setGameState(next) {
   if (gameLocked) next = "locked";
   gameState = next;
   refreshLaunchButton();
-  if (elInstr) elInstr.style.display = (gameState === "aiming") ? "block" : "none";
-  if (elDirCtrl) elDirCtrl.style.pointerEvents = (gameState === "locked") ? "none" : "auto";
+  if (elInstr) elInstr.style.display = gameState === "aiming" ? "block" : "none";
+  if (elDirCtrl) elDirCtrl.style.pointerEvents = gameState === "locked" ? "none" : "auto";
 }
 
 function refreshLaunchButton() {
   elLaunch.classList.remove("btn-aiming", "btn-charging", "btn-disabled");
-
   if (gameState === "locked") {
     elLaunch.textContent = "PREMIO OBTENIDO";
     elLaunch.classList.add("btn", "btn-disabled");
     elLaunch.disabled = true;
     return;
   }
-
   if (gameState === "charging") {
     elLaunch.textContent = "SOLTAR";
     elLaunch.classList.add("btn", "btn-charging");
@@ -342,7 +454,7 @@ function refreshLaunchButton() {
 function updateScoreUI() {
   if (elScore) elScore.textContent = String(score);
   if (elFrame) elFrame.textContent = String(frame);
-  if (elBall)  elBall.textContent  = String(attemptsUsed + 1);
+  if (elBall) elBall.textContent = String(attemptsUsed + 1);
 }
 
 function getPowerGradient(pct) {
@@ -355,15 +467,11 @@ function updatePowerUI() {
   elPowerFill.style.height = `${powerPct}%`;
   elPowerGlow.style.height = `${powerPct}%`;
   elPowerPct.textContent = `${Math.round(powerPct)}%`;
-
   const [a, b] = getPowerGradient(powerPct);
   elPowerFill.style.background = `linear-gradient(to top, ${a}, ${b})`;
   elPowerGlow.style.boxShadow = `0 0 20px ${a}`;
 }
 
-/* =========================
-   LOADING (simulado estilo v0)
-========================= */
 let loadingProgress = 0;
 const loadingInterval = setInterval(() => {
   loadingProgress = Math.min(100, loadingProgress + Math.random() * 15);
@@ -378,27 +486,22 @@ const loadingInterval = setInterval(() => {
   }
 }, 200);
 
-/* =========================
-   INPUT: Direction control
-========================= */
 let draggingDir = false;
 
 function setDirectionFromClientX(clientX) {
   if (gameLocked) return;
-
   const rect = elDirCtrl.getBoundingClientRect();
   const centerX = rect.left + rect.width / 2;
   const offset = (clientX - centerX) / (rect.width / 2);
   direction = clamp(offset, -1, 1);
-
   const leftPct = 50 + direction * 40;
   elDirInd.style.left = `${leftPct}%`;
-
   if (gameState === "aiming") placeBallForAiming(direction);
 }
 
 elDirCtrl.addEventListener("pointerdown", (e) => {
   if (gameLocked) return;
+  AudioSys.unlock();
   draggingDir = true;
   elDirCtrl.setPointerCapture(e.pointerId);
   setDirectionFromClientX(e.clientX);
@@ -410,26 +513,29 @@ elDirCtrl.addEventListener("pointermove", (e) => {
 elDirCtrl.addEventListener("pointerup", () => (draggingDir = false));
 elDirCtrl.addEventListener("pointercancel", () => (draggingDir = false));
 
-/* =========================
-   INPUT: Power charge (hold)
-========================= */
 function startCharge() {
   if (gameLocked) return;
   if (gameState !== "aiming") return;
-
+  AudioSys.unlock();
+  AudioSys.play("charge", { volume: 0.9, rate: 1 });
   setGameState("charging");
   isCharging = true;
   powerPct = 0;
   powerDir = 1;
   updatePowerUI();
   elPowerGlow.classList.remove("hidden");
-
   if (powerTimer) clearInterval(powerTimer);
   powerTimer = setInterval(() => {
     if (!isCharging || gameState !== "charging") return;
     let next = powerPct + powerDir * 3;
-    if (next >= 100) { next = 100; powerDir = -1; }
-    if (next <= 0) { next = 0; powerDir = 1; }
+    if (next >= 100) {
+      next = 100;
+      powerDir = -1;
+    }
+    if (next <= 0) {
+      next = 0;
+      powerDir = 1;
+    }
     powerPct = next;
     updatePowerUI();
   }, 25);
@@ -438,12 +544,14 @@ function startCharge() {
 function releaseCharge() {
   if (gameLocked) return;
   if (gameState !== "charging") return;
-
   isCharging = false;
   elPowerGlow.classList.add("hidden");
-  if (powerTimer) { clearInterval(powerTimer); powerTimer = null; }
-
+  if (powerTimer) {
+    clearInterval(powerTimer);
+    powerTimer = null;
+  }
   power = clamp(powerPct / 100, 0, 1);
+  AudioSys.play("throw", { volume: 0.95, rate: 1 });
   doThrow(power);
 }
 
@@ -464,23 +572,19 @@ elLaunch.addEventListener("pointercancel", () => {
 
 window.addEventListener("keydown", (e) => {
   if (gameLocked) return;
-
   if (e.key === "r" || e.key === "R") {
     e.preventDefault();
     resetGame();
     return;
   }
-
   if (gameState === "aiming") {
     if (e.key === "ArrowLeft") direction = clamp(direction - 0.08, -1, 1);
     if (e.key === "ArrowRight") direction = clamp(direction + 0.08, -1, 1);
-
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       const leftPct = 50 + direction * 40;
       elDirInd.style.left = `${leftPct}%`;
       placeBallForAiming(direction);
     }
-
     if (e.key === " " || e.key === "Enter") {
       e.preventDefault();
       startCharge();
@@ -491,23 +595,13 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-/* =========================
-   THREE + CANNON SETUP
-========================= */
-const container = $("three-container");
-
-// ✅ antialias OFF en móvil
+const threeContainer = $("three-container");
 const renderer = new THREE.WebGLRenderer({ antialias: PERF.antialias, alpha: false });
-
-// ✅ pixel ratio cap fuerte en móvil
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, PERF.dprCap));
 renderer.setSize(window.innerWidth, window.innerHeight);
-
-// ✅ sombras OFF en móvil (gran boost)
 renderer.shadowMap.enabled = PERF.shadows;
 renderer.shadowMap.type = PERF.shadows ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap;
-
-container.appendChild(renderer.domElement);
+threeContainer.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x1a0630, PERF.fogDensity);
@@ -523,7 +617,6 @@ window.addEventListener("resize", () => {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, PERF.dprCap));
 });
 
-// LIGHTING
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = PERF.mobile ? 1.02 : 1.08;
@@ -543,8 +636,7 @@ sun.shadow.camera.top = 12;
 sun.shadow.camera.bottom = -12;
 scene.add(sun);
 
-// ✅ en móvil: bajar intensidad/alcance de pointlights (menos costo)
-function neonPoint(x, y, z, color, intensity, dist){
+function neonPoint(x, y, z, color, intensity, dist) {
   const i = PERF.mobile ? intensity * 0.6 : intensity;
   const d = PERF.mobile ? dist * 0.75 : dist;
   const l = new THREE.PointLight(color, i, d);
@@ -552,58 +644,48 @@ function neonPoint(x, y, z, color, intensity, dist){
   scene.add(l);
   return l;
 }
-neonPoint(-1.7, 0.9,  2, 0x22d3ee, 1.2, 9);
-neonPoint( 1.7, 0.9,  2, 0xff4fd8, 1.1, 9);
-
+neonPoint(-1.7, 0.9, 2, 0x22d3ee, 1.2, 9);
+neonPoint(1.7, 0.9, 2, 0xff4fd8, 1.1, 9);
 neonPoint(-1.6, 0.6, -6, 0x22d3ee, 1.4, 10);
-neonPoint( 1.6, 0.6, -6, 0xff4fd8, 1.3, 10);
+neonPoint(1.6, 0.6, -6, 0xff4fd8, 1.3, 10);
+neonPoint(0.0, 1.4, -14, 0x22d3ee, 0.9, 12);
+neonPoint(0.0, 2.8, -18, 0xffb84a, 0.55, 16);
 
-neonPoint( 0.0, 1.4, -14, 0x22d3ee, 0.9, 12);
-neonPoint( 0.0, 2.8, -18, 0xffb84a, 0.55, 16);
-
-/* =========================================================
-   VISUAL THEME HELPERS
-========================================================= */
 function makeCanvasTexture(w, h, draw) {
   const c = document.createElement("canvas");
-  c.width = w; c.height = h;
+  c.width = w;
+  c.height = h;
   const ctx = c.getContext("2d");
   draw(ctx, w, h);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-
-  // ✅ anisotropy bajo en mobile
   const maxAniso = renderer.capabilities.getMaxAnisotropy();
   tex.anisotropy = PERF.mobile ? 2 : Math.min(8, maxAniso);
-
   return tex;
 }
 
 function makeSandTexture() {
-  // ✅ canvas texture más chica en móvil
   const size = PERF.mobile ? 512 : 1024;
   return makeCanvasTexture(size, size, (ctx, w, h) => {
     ctx.fillStyle = "#d8b27b";
     ctx.fillRect(0, 0, w, h);
-
     const img = ctx.getImageData(0, 0, w, h);
     const d = img.data;
     for (let i = 0; i < d.length; i += 4) {
       const n = (Math.random() - 0.5) * 32;
-      d[i]   = clamp(d[i]   + n, 0, 255);
-      d[i+1] = clamp(d[i+1] + n, 0, 255);
-      d[i+2] = clamp(d[i+2] + n, 0, 255);
+      d[i] = clamp(d[i] + n, 0, 255);
+      d[i + 1] = clamp(d[i + 1] + n, 0, 255);
+      d[i + 2] = clamp(d[i + 2] + n, 0, 255);
     }
     ctx.putImageData(img, 0, 0);
-
     ctx.globalAlpha = 0.18;
     const dots = PERF.mobile ? 650 : 1200;
     for (let i = 0; i < dots; i++) {
-      const r = 0.8 + Math.random()*1.8;
-      ctx.fillStyle = `rgba(90,60,30,${0.15 + Math.random()*0.25})`;
+      const r = 0.8 + Math.random() * 1.8;
+      ctx.fillStyle = `rgba(90,60,30,${0.15 + Math.random() * 0.25})`;
       ctx.beginPath();
-      ctx.arc(Math.random()*w, Math.random()*h, r, 0, Math.PI*2);
+      ctx.arc(Math.random() * w, Math.random() * h, r, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -617,10 +699,10 @@ function addSunsetSkyDome(scene) {
     transparent: false,
     fog: false,
     uniforms: {
-      topColor:    { value: new THREE.Color(0x2a0d4a) },
-      midColor:    { value: new THREE.Color(0xff4fb7) },
+      topColor: { value: new THREE.Color(0x2a0d4a) },
+      midColor: { value: new THREE.Color(0xff4fb7) },
       bottomColor: { value: new THREE.Color(0xffb84a) },
-      sunDir:      { value: new THREE.Vector3(0.0, 0.10, -1.0).normalize() },
+      sunDir: { value: new THREE.Vector3(0.0, 0.10, -1.0).normalize() },
     },
     vertexShader: `
       varying vec3 vWorld;
@@ -651,7 +733,7 @@ function addSunsetSkyDome(scene) {
         col += vec3(1.0, 0.72, 0.35) * (sun * 2.0 + halo);
         gl_FragColor = vec4(col, 1.0);
       }
-    `
+    `,
   });
   const dome = new THREE.Mesh(geo, mat);
   dome.renderOrder = -999;
@@ -664,10 +746,10 @@ function addHorizonSilhouettes(scene) {
   const baseZ = -55;
   const mat = new THREE.MeshBasicMaterial({ color: 0x090510 });
   for (let i = 0; i < 28; i++) {
-    const w = 0.6 + Math.random()*1.4;
-    const h = 1.0 + Math.random()*5.5;
+    const w = 0.6 + Math.random() * 1.4;
+    const h = 1.0 + Math.random() * 5.5;
     const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.8), mat);
-    b.position.set(-10 + i*0.75 + (Math.random()-0.5)*0.4, h*0.5 - 0.2, baseZ);
+    b.position.set(-10 + i * 0.75 + (Math.random() - 0.5) * 0.4, h * 0.5 - 0.2, baseZ);
     city.add(b);
   }
   scene.add(city);
@@ -675,37 +757,34 @@ function addHorizonSilhouettes(scene) {
   const palmMat = new THREE.MeshBasicMaterial({ color: 0x07030c, side: THREE.DoubleSide });
   for (let i = 0; i < 8; i++) {
     const p = new THREE.Mesh(new THREE.PlaneGeometry(4.0, 6.0), palmMat);
-    p.position.set(-14 + i*4.0, 2.2, baseZ + 2.0);
-    p.rotation.y = (Math.random()-0.5)*0.25;
+    p.position.set(-14 + i * 4.0, 2.2, baseZ + 2.0);
+    p.rotation.y = (Math.random() - 0.5) * 0.25;
     scene.add(p);
   }
 }
 
 function addStringLights(scene) {
   const bulbs = new THREE.Group();
-
   const bulbGeo = new THREE.SphereGeometry(0.07, PERF.bulbSeg, PERF.bulbSeg);
-
   const a = new THREE.Vector3(-3.6, 3.4, -6);
-  const b = new THREE.Vector3( 0.0, 4.1, -10);
-  const c = new THREE.Vector3( 3.6, 3.2, -6);
-
-  // ✅ menos steps en móvil
+  const b = new THREE.Vector3(0.0, 4.1, -10);
+  const c = new THREE.Vector3(3.6, 3.2, -6);
   const steps = PERF.mobile ? 10 : 16;
 
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
-    const p = new THREE.Vector3().copy(a).multiplyScalar((1-t)*(1-t))
-      .add(new THREE.Vector3().copy(b).multiplyScalar(2*(1-t)*t))
-      .add(new THREE.Vector3().copy(c).multiplyScalar(t*t));
+    const p = new THREE.Vector3()
+      .copy(a)
+      .multiplyScalar((1 - t) * (1 - t))
+      .add(new THREE.Vector3().copy(b).multiplyScalar(2 * (1 - t) * t))
+      .add(new THREE.Vector3().copy(c).multiplyScalar(t * t));
 
-    const warm = (i % 2 === 0);
+    const warm = i % 2 === 0;
     const m = new THREE.MeshBasicMaterial({ color: warm ? 0xffe08a : 0x22d3ee });
     const bulb = new THREE.Mesh(bulbGeo, m);
     bulb.position.copy(p);
     bulbs.add(bulb);
 
-    // ✅ en móvil, luces puntuales “bulbs” apagadas (eran 17 pointlights)
     if (!PERF.mobile) {
       const l = new THREE.PointLight(warm ? 0xffb84a : 0x22d3ee, 0.35, 2.2);
       l.position.copy(p);
@@ -723,7 +802,7 @@ function addBeachSidesWithProps(parent) {
     color: 0xf0c98d,
     map: sandTex,
     roughness: 0.95,
-    metalness: 0.0
+    metalness: 0.0,
   });
 
   const sandL = new THREE.Mesh(new THREE.PlaneGeometry(6, 30), sandMat);
@@ -734,20 +813,19 @@ function addBeachSidesWithProps(parent) {
 
   const sandR = new THREE.Mesh(new THREE.PlaneGeometry(6, 30), sandMat);
   sandR.rotation.x = -Math.PI / 2;
-  sandR.position.set( 4.2, -0.09, -5);
+  sandR.position.set(4.2, -0.09, -5);
   sandR.receiveShadow = PERF.shadows;
   parent.add(sandR);
 
-  // ✅ menos props en móvil
   scatterProps(parent, -4.2, -5, PERF.mobile ? 6 : 10);
-  scatterProps(parent,  4.2, -5, PERF.mobile ? 6 : 10);
+  scatterProps(parent, 4.2, -5, PERF.mobile ? 6 : 10);
 }
 
 function scatterProps(parent, sideX, centerZ, count = 10) {
   const g = new THREE.Group();
   g.position.set(sideX, 0, 0);
 
-  function chip(x, z, c1, c2){
+  function chip(x, z, c1, c2) {
     const seg = PERF.mobile ? 16 : 28;
     const chipGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.06, seg);
     const mat = new THREE.MeshStandardMaterial({ color: c1, roughness: 0.35, metalness: 0.25 });
@@ -755,56 +833,56 @@ function scatterProps(parent, sideX, centerZ, count = 10) {
 
     const m = new THREE.Mesh(chipGeo, mat);
     m.position.set(x, -0.02, z);
-    m.rotation.y = Math.random()*Math.PI;
+    m.rotation.y = Math.random() * Math.PI;
     m.castShadow = PERF.shadows;
     g.add(m);
 
     const ringSeg = PERF.mobile ? 14 : 24;
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.015, 10, ringSeg), top);
     ring.position.copy(m.position);
-    ring.rotation.set(Math.PI/2, 0, m.rotation.y);
+    ring.rotation.set(Math.PI / 2, 0, m.rotation.y);
     ring.castShadow = PERF.shadows;
     g.add(ring);
   }
 
-  function dice(x, z){
+  function dice(x, z) {
     const d = new THREE.Mesh(
       new THREE.BoxGeometry(0.22, 0.22, 0.22),
       new THREE.MeshStandardMaterial({ color: 0xf6f2ea, roughness: 0.35, metalness: 0.0 })
     );
     d.position.set(x, 0.02, z);
-    d.rotation.set(Math.random()*0.6, Math.random()*Math.PI, Math.random()*0.6);
+    d.rotation.set(Math.random() * 0.6, Math.random() * Math.PI, Math.random() * 0.6);
     d.castShadow = PERF.shadows;
     g.add(d);
   }
 
-  function card(x, z){
+  function card(x, z) {
     const m = new THREE.Mesh(
       new THREE.PlaneGeometry(0.45, 0.62),
       new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0.0, side: THREE.DoubleSide })
     );
     m.position.set(x, -0.02, z);
-    m.rotation.set(-Math.PI/2, 0, (Math.random()-0.5)*0.6);
+    m.rotation.set(-Math.PI / 2, 0, (Math.random() - 0.5) * 0.6);
     g.add(m);
 
     const pip = new THREE.Mesh(
       new THREE.CircleGeometry(0.06, PERF.mobile ? 12 : 18),
       new THREE.MeshBasicMaterial({ color: Math.random() > 0.5 ? 0xff2d5f : 0x111111 })
     );
-    pip.position.set(x + (Math.random()-0.5)*0.12, -0.019, z + (Math.random()-0.5)*0.12);
-    pip.rotation.x = -Math.PI/2;
+    pip.position.set(x + (Math.random() - 0.5) * 0.12, -0.019, z + (Math.random() - 0.5) * 0.12);
+    pip.rotation.x = -Math.PI / 2;
     g.add(pip);
   }
 
   const zMin = centerZ - 13;
   const zMax = centerZ + 13;
 
-  for (let i = 0; i < count; i++){
-    const x = (Math.random()-0.5) * 2.2;
-    const z = zMin + Math.random()*(zMax - zMin);
+  for (let i = 0; i < count; i++) {
+    const x = (Math.random() - 0.5) * 2.2;
+    const z = zMin + Math.random() * (zMax - zMin);
     const r = Math.random();
     if (r < 0.45) chip(x, z, 0x22d3ee, 0xffb84a);
-    else if (r < 0.70) chip(x, z, 0xff4fd8, 0xffb84a);
+    else if (r < 0.7) chip(x, z, 0xff4fd8, 0xffb84a);
     else if (r < 0.88) dice(x, z);
     else card(x, z);
   }
@@ -812,60 +890,32 @@ function scatterProps(parent, sideX, centerZ, count = 10) {
   parent.add(g);
 }
 
-/* =========================
-   PHYSICS
-========================= */
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.81, 0) });
-
-// ✅ permitir sleep
 world.allowSleep = true;
-
-// ✅ un poco más estable + barato en mobile
 world.broadphase = new CANNON.SAPBroadphase(world);
 world.solver.iterations = PERF.solverIterations;
 world.solver.tolerance = PERF.solverTolerance;
-
-// ✅ Sleep tuning (más tolerante en mobile para “dormir” antes)
-world.sleepSpeedLimit = PERF.mobile ? 0.15 : 0.10;
-world.sleepTimeLimit  = PERF.mobile ? 0.7  : 0.45;
+world.sleepSpeedLimit = PERF.mobile ? 0.15 : 0.1;
+world.sleepTimeLimit = PERF.mobile ? 0.7 : 0.45;
 
 const floorMat = new CANNON.Material("floor");
-const ballMat  = new CANNON.Material("ball");
-const pinMat   = new CANNON.Material("pin");
+const ballMat = new CANNON.Material("ball");
+const pinMat = new CANNON.Material("pin");
 
-// Contacts (menos rebote + menos “pin a la luna”)
-world.defaultContactMaterial = new CANNON.ContactMaterial(floorMat, floorMat, {
-  restitution: 0.05,
-  friction: 0.75
-});
+world.defaultContactMaterial = new CANNON.ContactMaterial(floorMat, floorMat, { restitution: 0.05, friction: 0.75 });
 
-world.addContactMaterial(new CANNON.ContactMaterial(ballMat, floorMat, {
-  restitution: 0.03,
-  friction: 0.18
-}));
-world.addContactMaterial(new CANNON.ContactMaterial(pinMat, floorMat, {
-  restitution: 0.05,
-  friction: 0.55
-}));
-world.addContactMaterial(new CANNON.ContactMaterial(ballMat, pinMat, {
-  restitution: 0.10,
-  friction: 0.25
-}));
-world.addContactMaterial(new CANNON.ContactMaterial(pinMat, pinMat, {
-  restitution: 0.12,
-  friction: 0.45
-}));
+world.addContactMaterial(new CANNON.ContactMaterial(ballMat, floorMat, { restitution: 0.03, friction: 0.18 }));
+world.addContactMaterial(new CANNON.ContactMaterial(pinMat, floorMat, { restitution: 0.05, friction: 0.55 }));
+world.addContactMaterial(new CANNON.ContactMaterial(ballMat, pinMat, { restitution: 0.1, friction: 0.25 }));
+world.addContactMaterial(new CANNON.ContactMaterial(pinMat, pinMat, { restitution: 0.12, friction: 0.45 }));
 
-/* Floor plane */
 const floorBody = new CANNON.Body({ mass: 0, material: floorMat });
 floorBody.addShape(new CANNON.Plane());
 floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
 world.addBody(floorBody);
 
-/* Invisible side walls */
 addStaticWall(-1.15, 0.25, -5, 0.05, 0.6, 32);
-addStaticWall( 1.15, 0.25, -5, 0.05, 0.6, 32);
-/* Back stop */
+addStaticWall(1.15, 0.25, -5, 0.05, 0.6, 32);
 addStaticWall(0, 0.6, -19.5, 3, 1.2, 0.2);
 
 function addStaticWall(x, y, z, sx, sy, sz) {
@@ -875,9 +925,6 @@ function addStaticWall(x, y, z, sx, sy, sz) {
   world.addBody(body);
 }
 
-/* =========================
-   SCENE BUILD
-========================= */
 const laneGroup = new THREE.Group();
 scene.add(laneGroup);
 
@@ -893,24 +940,22 @@ addHorizonSilhouettes(scene);
 addStringLights(scene);
 addBeachSidesWithProps(laneGroup);
 
-// PIN SIZE
 const PIN_HEIGHT = 0.82;
 const PIN_Y = PIN_HEIGHT / 2;
 const PIN_R_BOTTOM = 0.11;
 const PIN_R_TOP = 0.06;
 
-// posiciones compactas
 const PIN_POSITIONS = [
-  [ 0.00, PIN_Y, -15.00],
+  [0.0, PIN_Y, -15.0],
   [-0.23, PIN_Y, -15.42],
-  [ 0.23, PIN_Y, -15.42],
+  [0.23, PIN_Y, -15.42],
   [-0.46, PIN_Y, -15.84],
-  [ 0.00, PIN_Y, -15.84],
-  [ 0.46, PIN_Y, -15.84],
+  [0.0, PIN_Y, -15.84],
+  [0.46, PIN_Y, -15.84],
   [-0.69, PIN_Y, -16.26],
   [-0.23, PIN_Y, -16.26],
-  [ 0.23, PIN_Y, -16.26],
-  [ 0.69, PIN_Y, -16.26],
+  [0.23, PIN_Y, -16.26],
+  [0.69, PIN_Y, -16.26],
 ];
 
 const ball = createElectricBall();
@@ -947,9 +992,6 @@ for (let i = 0; i < PIN_POSITIONS.length; i++) {
 
 let knockedSet = new Set();
 
-/* =========================
-   ✅ Onda expansiva hacia atrás + control
-========================= */
 let lastShockMs = 0;
 
 function applyBackShock(primaryPin) {
@@ -992,6 +1034,8 @@ function applyBackShock(primaryPin) {
   }
 }
 
+let lastHitSfxMs = 0;
+
 ballBody.addEventListener("collide", (e) => {
   const other = e.body;
   const pin = pinByBodyId.get(other?.id);
@@ -1001,58 +1045,60 @@ ballBody.addEventListener("collide", (e) => {
   if (pin._lastShock && now - pin._lastShock < 120) return;
   pin._lastShock = now;
 
+  let impact = 0;
+  try {
+    if (e.contact && typeof e.contact.getImpactVelocityAlongNormal === "function") {
+      impact = Math.abs(e.contact.getImpactVelocityAlongNormal());
+    }
+  } catch {
+    impact = 0;
+  }
+  if (!impact) {
+    const v = ballBody.velocity;
+    impact = Math.hypot(v.x, v.y, v.z);
+  }
+
+  if (now - lastHitSfxMs > 55) {
+    lastHitSfxMs = now;
+    const vol = clamp(impact / 10, 0.12, 0.85);
+    const rate = clamp(0.95 + (Math.random() - 0.5) * 0.12, 0.85, 1.1);
+    AudioSys.play("hit", { volume: vol, rate });
+  }
+
   applyBackShock(pin);
 });
 
-/* =========================
-   ✅ clamp de movimiento (anti “vuelos” y anti hacia la pista)
-========================= */
 function clampPinsMotion() {
   for (const pin of pins) {
     if (pin.isRemoved) continue;
-
     const v = pin.body.velocity;
     const w = pin.body.angularVelocity;
-
     if (v.z > 1.6) v.z = 1.6;
-
     v.x = clamp(v.x, -6.0, 6.0);
     v.y = clamp(v.y, -4.0, 6.0);
     v.z = clamp(v.z, -22.0, 2.0);
-
     w.x = clamp(w.x, -22, 22);
     w.y = clamp(w.y, -22, 22);
     w.z = clamp(w.z, -22, 22);
   }
 }
 
-/* =========================
-   ✅ plantar pinos parados (inicio / reset)
-========================= */
 function plantPinsStanding() {
   for (const pin of pins) {
     if (pin.isRemoved) continue;
-
     pin.isKnocked = false;
     const [x, y, z] = pin.initialPos;
-
     pin.body.position.set(x, y + PIN_STAND_Y_EPS, z);
     pin.body.velocity.set(0, 0, 0);
     pin.body.angularVelocity.set(0, 0, 0);
     pin.body.quaternion.set(0, 0, 0, 1);
-
     pin.body.sleep();
   }
 }
 
-/* =========================
-   GAME LOGIC
-========================= */
 function doThrow(pwr01) {
   if (gameLocked) return;
-
   power = pwr01;
-
   if (gameState !== "charging" && gameState !== "aiming") return;
   if (ballHasThrown) return;
   if (attemptsUsed >= MAX_ATTEMPTS) return;
@@ -1079,11 +1125,7 @@ function doThrow(pwr01) {
   const throwPower = 18 + power * 12;
   const directionRad = direction * 0.35;
 
-  ballBody.velocity.set(
-    Math.sin(directionRad) * throwPower * 0.25,
-    0,
-    -throwPower
-  );
+  ballBody.velocity.set(Math.sin(directionRad) * throwPower * 0.25, 0, -throwPower);
   ballBody.angularVelocity.set(-throwPower * 3, Math.sin(directionRad) * 5, 0);
 }
 
@@ -1096,7 +1138,6 @@ function lockGameWithReward(bonus, attemptNumber) {
 
 function onThrowComplete() {
   if (gameState !== "throwing") return;
-
   setGameState("waiting");
 
   setTimeout(() => {
@@ -1117,17 +1158,18 @@ function onThrowComplete() {
     if (totalKnocked >= 10) {
       const bonus = bonusByAttempt(attemptNumber);
 
-      if (attemptNumber === 1) showStrike();
-      else showSpare();
+      if (attemptNumber === 1) {
+        showStrike();
+        AudioSys.play("strike", { volume: 1, rate: 1 });
+      } else {
+        showSpare();
+        AudioSys.play("spare", { volume: 1, rate: 1 });
+      }
 
+      AudioSys.play("reward", { volume: 0.95, rate: 1 });
       lockGameWithReward(bonus, attemptNumber);
 
-      showRewardModal(
-        "¡Felicitaciones! 🎉",
-        `Obtuviste un ${bonus}% de bono.`,
-        null,
-        "Aceptar"
-      );
+      showRewardModal("¡Felicitaciones! 🎉", `Obtuviste un ${bonus}% de bono.`, null, "Aceptar");
       return;
     }
 
@@ -1139,6 +1181,7 @@ function onThrowComplete() {
 
     if (attemptsUsed >= MAX_ATTEMPTS) {
       setGameState("resetting");
+      AudioSys.play("fail", { volume: 0.95, rate: 1 });
       showRewardModal(
         "¡Se terminaron tus intentos!",
         "No lograste tirar todos los pinos. Podés intentar de nuevo.",
@@ -1157,10 +1200,8 @@ function onThrowComplete() {
 function handlePinsKnocked(countThisThrow, totalKnocked, attemptNumber) {
   pinsDownLastThrow = countThisThrow;
   totalPinsThisFrame = totalKnocked;
-
   score += countThisThrow * 10;
   updateScoreUI();
-
   if (totalKnocked === 10 && attemptNumber === 1) showStrike();
   else if (totalKnocked === 10 && attemptNumber > 1) showSpare();
 }
@@ -1204,9 +1245,6 @@ function resetGame() {
   }, 600);
 }
 
-/* =========================
-   RESET HELPERS
-========================= */
 function resetBall(hard = true) {
   ballHasThrown = false;
 
@@ -1257,13 +1295,8 @@ function resetPins() {
   }
 }
 
-/* =========================
-   ANIMATION LOOP (✅ FPS LIMIT + ✅ dt/substeps mobile)
-========================= */
 let lastT = performance.now();
 let acc = 0;
-
-// ✅ FPS cap
 let lastRenderMs = 0;
 const minFrameMs = 1000 / PERF.targetFps;
 
@@ -1271,27 +1304,18 @@ refreshLaunchButton();
 updateScoreUI();
 updatePowerUI();
 placeBallForAiming(direction);
-
-// ✅ al iniciar: plantar pinos
 plantPinsStanding();
 
-// ✅ si ya ganó antes (reload): bloquear + mostrar premio
 if (gameLocked && savedReward) {
   setGameState("locked");
   setTimeout(() => {
-    showRewardModal(
-      "Premio ya obtenido ✅",
-      `Tu premio fue: ${savedReward.bonus}% de bono.`,
-      null,
-      "Aceptar"
-    );
+    showRewardModal("Premio ya obtenido ✅", `Tu premio fue: ${savedReward.bonus}% de bono.`, null, "Aceptar");
   }, 950);
 }
 
 function animate(t) {
   requestAnimationFrame(animate);
 
-  // ✅ limitar FPS en móvil
   if (PERF.mobile) {
     const ms = t;
     if (ms - lastRenderMs < minFrameMs) return;
@@ -1309,7 +1333,6 @@ function animate(t) {
     acc -= PERF.fixedDt;
     sub++;
   }
-  // evita “espiral de muerte” si se atrasa el frame
   acc = Math.min(acc, PERF.fixedDt);
 
   if (gameState === "throwing" && ballHasThrown && !ballCaptured && shouldCaptureBall()) {
@@ -1338,7 +1361,7 @@ function animate(t) {
     }
   }
 
-  aimIndicator.visible = (gameState === "aiming" && !gameLocked);
+  aimIndicator.visible = gameState === "aiming" && !gameLocked;
   if (aimIndicator.visible) aimIndicator.position.set(direction * 0.8, 0.03, 6);
 
   updateTorches(t / 1000);
@@ -1358,9 +1381,6 @@ function animate(t) {
 }
 requestAnimationFrame(animate);
 
-/* =========================
-   BUILD FUNCTIONS (3D)
-========================= */
 function buildLane(parent) {
   const laneMat = new THREE.MeshStandardMaterial({ color: 0xc9a66b, roughness: 0.4, metalness: 0.05 });
   const lane = new THREE.Mesh(new THREE.PlaneGeometry(2, 28), laneMat);
@@ -1443,7 +1463,7 @@ function buildSideNeonRails(parent) {
         emissive: 0x22d3ee,
         emissiveIntensity: PERF.mobile ? 1.6 : 2.4,
         roughness: 0.25,
-        metalness: 0.2
+        metalness: 0.2,
       })
     );
     strip.position.set(x + (i === 0 ? 0.07 : -0.07), 0.3, -5);
@@ -1451,12 +1471,16 @@ function buildSideNeonRails(parent) {
 
     const glow = new THREE.Mesh(
       new THREE.BoxGeometry(0.2, 0.8, 27.5),
-      new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: PERF.mobile ? 0.10 : 0.15, blending: THREE.AdditiveBlending })
+      new THREE.MeshBasicMaterial({
+        color: 0x00e5ff,
+        transparent: true,
+        opacity: PERF.mobile ? 0.1 : 0.15,
+        blending: THREE.AdditiveBlending,
+      })
     );
     glow.position.set(x + (i === 0 ? 0.1 : -0.1), 0.3, -5);
     rail.add(glow);
 
-    // ✅ en móvil: menos pointlights en rails
     const zs = PERF.mobile ? [-10, 0] : [-10, -5, 0, 5];
     zs.forEach((z) => {
       const pl = new THREE.PointLight(0x00e5ff, PERF.mobile ? 0.45 : 0.8, PERF.mobile ? 3.2 : 4);
@@ -1594,7 +1618,10 @@ function makePalm(pos, scale = 1) {
     [0.08, 2.15, 0.05],
     [-0.06, 2.12, -0.08],
   ].forEach((p) => {
-    const c = new THREE.Mesh(new THREE.SphereGeometry(0.06, PERF.mobile ? 8 : 12, PERF.mobile ? 8 : 12), cocoMat);
+    const c = new THREE.Mesh(
+      new THREE.SphereGeometry(0.06, PERF.mobile ? 8 : 12, PERF.mobile ? 8 : 12),
+      cocoMat
+    );
     c.position.set(...p);
     c.castShadow = PERF.shadows;
     g.add(c);
@@ -1637,7 +1664,6 @@ function makeTorch(pos) {
   inner.position.set(0, 1.58, 0);
   group.add(inner);
 
-  // ✅ luz de antorcha más barata en móvil
   const light = new THREE.PointLight(0xff6622, PERF.mobile ? 1.0 : 1.5, PERF.mobile ? 3 : 4);
   light.position.set(0, 1.6, 0);
   group.add(light);
@@ -1665,14 +1691,24 @@ function createElectricBall() {
 
   const glow = new THREE.Mesh(
     new THREE.SphereGeometry(0.25, PERF.ballGlowSeg, PERF.ballGlowSeg),
-    new THREE.MeshBasicMaterial({ color: 0x00d4ff, transparent: true, opacity: PERF.mobile ? 0.28 : 0.4, blending: THREE.AdditiveBlending })
+    new THREE.MeshBasicMaterial({
+      color: 0x00d4ff,
+      transparent: true,
+      opacity: PERF.mobile ? 0.28 : 0.4,
+      blending: THREE.AdditiveBlending,
+    })
   );
   glow.scale.setScalar(1.1);
   group.add(glow);
 
   const inner = new THREE.Mesh(
     new THREE.SphereGeometry(0.25, PERF.ballGlowSeg, PERF.ballGlowSeg),
-    new THREE.MeshBasicMaterial({ color: 0x0088ff, transparent: true, opacity: PERF.mobile ? 0.45 : 0.6, blending: THREE.AdditiveBlending })
+    new THREE.MeshBasicMaterial({
+      color: 0x0088ff,
+      transparent: true,
+      opacity: PERF.mobile ? 0.45 : 0.6,
+      blending: THREE.AdditiveBlending,
+    })
   );
   inner.scale.setScalar(1.05);
   group.add(inner);
@@ -1684,14 +1720,18 @@ function createElectricBall() {
   for (let i = 0; i < ringCount; i++) {
     const r = new THREE.Mesh(
       new THREE.TorusGeometry(0.25, 0.008, 8, ringSeg, Math.PI * 0.6),
-      new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: PERF.mobile ? 0.65 : 0.8, blending: THREE.AdditiveBlending })
+      new THREE.MeshBasicMaterial({
+        color: 0x00ffff,
+        transparent: true,
+        opacity: PERF.mobile ? 0.65 : 0.8,
+        blending: THREE.AdditiveBlending,
+      })
     );
     r.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
     rings.push(r);
     group.add(r);
   }
 
-  // ✅ pointlight de la bola más leve en mobile
   const pl = new THREE.PointLight(0x00d4ff, PERF.mobile ? 1.2 : 2, PERF.mobile ? 2.2 : 3);
   group.add(pl);
 
@@ -1707,7 +1747,6 @@ function createElectricBall() {
 function createPin(id, pos) {
   const group = new THREE.Group();
 
-  // ✅ en mobile: menos “physical material”
   const whiteMat = PERF.mobile
     ? new THREE.MeshStandardMaterial({ color: 0xfaf7f2, roughness: 0.28, metalness: 0.0 })
     : new THREE.MeshPhysicalMaterial({
@@ -1718,27 +1757,23 @@ function createPin(id, pos) {
         clearcoatRoughness: 0.12,
       });
 
-  const redMat = new THREE.MeshStandardMaterial({
-    color: 0xd1162a,
-    roughness: 0.35,
-    metalness: 0.05,
-  });
+  const redMat = new THREE.MeshStandardMaterial({ color: 0xd1162a, roughness: 0.35, metalness: 0.05 });
 
   const h = PIN_HEIGHT;
   const y0 = -h / 2;
 
   const profile = [
-    new THREE.Vector2(0.060, y0 + 0.00 * h),
-    new THREE.Vector2(0.110, y0 + 0.05 * h),
+    new THREE.Vector2(0.06, y0 + 0.0 * h),
+    new THREE.Vector2(0.11, y0 + 0.05 * h),
     new THREE.Vector2(0.115, y0 + 0.12 * h),
     new THREE.Vector2(0.102, y0 + 0.28 * h),
     new THREE.Vector2(0.078, y0 + 0.45 * h),
     new THREE.Vector2(0.095, y0 + 0.62 * h),
-    new THREE.Vector2(0.090, y0 + 0.72 * h),
-    new THREE.Vector2(0.070, y0 + 0.82 * h),
-    new THREE.Vector2(0.060, y0 + 0.90 * h),
+    new THREE.Vector2(0.09, y0 + 0.72 * h),
+    new THREE.Vector2(0.07, y0 + 0.82 * h),
+    new THREE.Vector2(0.06, y0 + 0.9 * h),
     new THREE.Vector2(0.065, y0 + 0.96 * h),
-    new THREE.Vector2(0.050, y0 + 1.00 * h),
+    new THREE.Vector2(0.05, y0 + 1.0 * h),
   ];
 
   const geo = new THREE.LatheGeometry(profile, PERF.pinLatheSeg);
@@ -1751,19 +1786,13 @@ function createPin(id, pos) {
   const ringRadius = 0.085;
   const ringTube = 0.0075;
 
-  const ring1 = new THREE.Mesh(
-    new THREE.TorusGeometry(ringRadius, ringTube, 10, PERF.pinRingSeg),
-    redMat
-  );
+  const ring1 = new THREE.Mesh(new THREE.TorusGeometry(ringRadius, ringTube, 10, PERF.pinRingSeg), redMat);
   ring1.rotation.x = Math.PI / 2;
-  ring1.position.y = y0 + 0.70 * h;
+  ring1.position.y = y0 + 0.7 * h;
   ring1.castShadow = PERF.shadows;
   group.add(ring1);
 
-  const ring2 = new THREE.Mesh(
-    new THREE.TorusGeometry(ringRadius * 0.97, ringTube, 10, PERF.pinRingSeg),
-    redMat
-  );
+  const ring2 = new THREE.Mesh(new THREE.TorusGeometry(ringRadius * 0.97, ringTube, 10, PERF.pinRingSeg), redMat);
   ring2.rotation.x = Math.PI / 2;
   ring2.position.y = y0 + 0.75 * h;
   ring2.castShadow = PERF.shadows;
@@ -1810,7 +1839,7 @@ function createAimIndicator() {
   g.add(ring);
 
   const arrow = new THREE.Mesh(
-    new THREE.ConeGeometry(0.1, 0.3, PERF.mobile ? 3 : 3),
+    new THREE.ConeGeometry(0.1, 0.3, 3),
     new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.6 })
   );
   arrow.position.set(0, 0.01, -0.4);
