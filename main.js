@@ -279,25 +279,29 @@ renderer.toneMappingExposure=PERF.mobile?0.95:1.05;
 renderer.setClearColor(0x050a18,1);
 
 /* ══ LIGHTS — Arkana neon ══ */
-const hemi=new THREE.HemisphereLight(0x0a2040,0x000005,PERF.mobile?0.35:0.45);
+const hemi=new THREE.HemisphereLight(0x1a3a6a,0x050a18,PERF.mobile?0.65:0.80);
 scene.add(hemi);
-const sun=new THREE.DirectionalLight(0x88aaff,PERF.mobile?0.7:0.9);
+const sun=new THREE.DirectionalLight(0x88aaff,PERF.mobile?0.9:1.1);
 sun.position.set(-4,10,8);sun.castShadow=PERF.shadows;
 sun.shadow.mapSize.set(PERF.shadowMapSize,PERF.shadowMapSize);
 sun.shadow.camera.near=1;sun.shadow.camera.far=50;
 sun.shadow.camera.left=-12;sun.shadow.camera.right=12;
 sun.shadow.camera.top=12;sun.shadow.camera.bottom=-12;
 scene.add(sun);
+/* Ambient fill so nothing is pitch black */
+const ambient=new THREE.AmbientLight(0x0a1830,PERF.mobile?0.5:0.65);
+scene.add(ambient);
 function neonPoint(x,y,z,color,intensity,dist){
-  const i=PERF.mobile?intensity*0.6:intensity,d=PERF.mobile?dist*0.75:dist;
+  const i=PERF.mobile?intensity*0.7:intensity,d=PERF.mobile?dist*0.80:dist;
   const l=new THREE.PointLight(color,i,d);l.position.set(x,y,z);scene.add(l);return l;
 }
-neonPoint(-1.7,0.9,2,0x22d3ee,1.4,9);
-neonPoint(1.7,0.9,2,0xff4fd8,1.2,9);
-neonPoint(-1.6,0.6,-6,0x22d3ee,1.6,10);
-neonPoint(1.6,0.6,-6,0xF0C040,1.4,10);
-neonPoint(0.0,1.4,-14,0x22d3ee,1.0,12);
-neonPoint(0.0,2.8,-18,0xF0C040,0.65,16);
+neonPoint(-1.7,0.9,2,0x22d3ee,2.0,11);
+neonPoint(1.7,0.9,2,0xff4fd8,1.8,11);
+neonPoint(-1.6,0.6,-6,0x22d3ee,2.2,12);
+neonPoint(1.6,0.6,-6,0xF0C040,2.0,12);
+neonPoint(0.0,1.4,-14,0x22d3ee,1.6,14);
+neonPoint(0.0,2.8,-18,0xF0C040,1.0,18);
+neonPoint(0.0,1.0,8,0x4466aa,1.2,10);
 
 /* ══ DARK SPACE SKY ══ */
 function addArkanasky(){
@@ -606,30 +610,150 @@ function buildBackArch(parent){
 }
 
 function buildLaneDecor(parent){
-  /* Neon chip stacks instead of beach chips */
-  parent.add(makeNeonChipStack([-2,0,6],[0x22d3ee,0xff4fd8,0xF0C040]));
-  parent.add(makeNeonChipStack([2,0,5],[0xF0C040,0x22d3ee,0xff4fd8]));
-  parent.add(makeNeonChipStack([-2.2,0,2],[0xff4fd8,0xF0C040,0x22d3ee]));
-  parent.add(makeNeonChipStack([2.2,0,0],[0x22d3ee,0xff4fd8,0xF0C040]));
-  /* Dark side panels instead of beach sand */
-  [-3.5,3.5].forEach(x=>{
-    const panel=new THREE.Mesh(new THREE.PlaneGeometry(4,28),new THREE.MeshStandardMaterial({color:0x030710,roughness:0.95}));
-    panel.rotation.x=-Math.PI/2;panel.position.set(x,-0.08,-5);parent.add(panel);
-  });
-  /* Torches */
+  /* ── Neon grid floor extending to sides (MeshBasicMaterial = free on mobile) ── */
+  addNeonGridFloor(parent);
+  /* ── Casino chips & cards as FLAT sprites on the floor ── */
+  addFlatCasinoProps(parent);
+  /* ── Dark city silhouette in background ── */
+  addCitySilhouette(parent);
+  /* ── Neon pillars flanking the lane ── */
+  addNeonPillars(parent);
+  /* ── Torches ── */
   const t1=makeTorch([-2.8,0,8]),t2=makeTorch([2.8,0,8]);
   parent.add(t1.group);parent.add(t2.group);torches.push(t1,t2);
 }
 
-function makeNeonChipStack(pos,colors){
-  const g=new THREE.Group();g.position.set(...pos);
-  const seg=PERF.mobile?16:28,torSeg=PERF.mobile?18:32;
-  colors.forEach((c,i)=>{
-    const chip=new THREE.Mesh(new THREE.CylinderGeometry(0.15,0.15,0.05,seg),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.15,metalness:0.3,roughness:0.4}));
-    chip.position.set(0,0.03+i*0.06,0);chip.rotation.y=i*0.5;chip.castShadow=PERF.shadows;g.add(chip);
-    const ring=new THREE.Mesh(new THREE.TorusGeometry(0.14,0.012,8,torSeg),new THREE.MeshStandardMaterial({color:0xffd700,metalness:0.7,roughness:0.2}));
-    ring.position.copy(chip.position);ring.rotation.set(Math.PI/2,0,chip.rotation.y);g.add(ring);
-  });return g;
+/* Neon grid floor — single PlaneGeometry with canvas texture, very cheap */
+function addNeonGridFloor(parent){
+  const size=PERF.mobile?256:512;
+  const canvas=document.createElement('canvas');canvas.width=size;canvas.height=size;
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle='#030710';ctx.fillRect(0,0,size,size);
+  const step=size/12;
+  ctx.strokeStyle='rgba(34,211,238,0.18)';ctx.lineWidth=1;
+  for(let i=0;i<=12;i++){
+    ctx.beginPath();ctx.moveTo(i*step,0);ctx.lineTo(i*step,size);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(0,i*step);ctx.lineTo(size,i*step);ctx.stroke();
+  }
+  /* Brighter center cross */
+  ctx.strokeStyle='rgba(34,211,238,0.35)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(size/2,0);ctx.lineTo(size/2,size);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(0,size/2);ctx.lineTo(size,size/2);ctx.stroke();
+  const tex=new THREE.CanvasTexture(canvas);
+  tex.wrapS=tex.wrapT=THREE.RepeatWrapping;tex.repeat.set(4,8);
+  const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:0.7});
+  [-4.5,4.5].forEach(x=>{
+    const fl=new THREE.Mesh(new THREE.PlaneGeometry(6,30),mat);
+    fl.rotation.x=-Math.PI/2;fl.position.set(x,-0.05,-4);parent.add(fl);
+  });
+}
+
+/* Flat casino props — PlaneGeometry sprites, near-zero cost */
+function addFlatCasinoProps(parent){
+  const chipColors=[0x22d3ee,0xff4fd8,0xF0C040,0x22c55e,0xff4444,0x9966ff];
+  const baseMat=new THREE.MeshBasicMaterial({transparent:true,opacity:0.85,side:THREE.DoubleSide});
+
+  /* Chip canvas */
+  function makeChipTex(color){
+    const c=document.createElement('canvas');c.width=64;c.height=64;
+    const ctx=c.getContext('2d');
+    const r=28,cx=32,cy=32;
+    ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);
+    ctx.fillStyle='#'+(color).toString(16).padStart(6,'0');ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.5)';ctx.lineWidth=3;ctx.stroke();
+    /* Inner ring */
+    ctx.beginPath();ctx.arc(cx,cy,r-6,0,Math.PI*2);
+    ctx.strokeStyle='rgba(255,255,255,0.25)';ctx.lineWidth=2;ctx.stroke();
+    /* Notches */
+    for(let i=0;i<8;i++){
+      const a=i/8*Math.PI*2;
+      ctx.fillStyle='rgba(255,255,255,0.3)';ctx.beginPath();
+      ctx.arc(cx+Math.cos(a)*(r-3),cy+Math.sin(a)*(r-3),4,0,Math.PI*2);ctx.fill();
+    }
+    const tex=new THREE.CanvasTexture(c);return tex;
+  }
+
+  /* Card canvas */
+  function makeCardTex(suit){
+    const c=document.createElement('canvas');c.width=48;c.height=64;
+    const ctx=c.getContext('2d');
+    ctx.fillStyle='rgba(240,235,220,0.92)';
+    ctx.beginPath();ctx.roundRect(2,2,44,60,6);ctx.fill();
+    ctx.fillStyle=suit==='♥'||suit==='♦'?'#cc2222':'#111';
+    ctx.font='bold 28px serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(suit,24,32);
+    const tex=new THREE.CanvasTexture(c);return tex;
+  }
+
+  const suits=['♠','♥','♦','♣'];
+  const propCount=PERF.mobile?18:28;
+
+  for(let i=0;i<propCount;i++){
+    const isCard=Math.random()<0.35;
+    let tex,w,h;
+    if(isCard){
+      tex=makeCardTex(suits[Math.floor(Math.random()*suits.length)]);w=0.28;h=0.38;
+    } else {
+      tex=makeChipTex(chipColors[Math.floor(Math.random()*chipColors.length)]);w=0.25;h=0.25;
+    }
+    const m=baseMat.clone();m.map=tex;
+    const mesh=new THREE.Mesh(new THREE.PlaneGeometry(w,h),m);
+    /* Scatter only on the sides, not on the lane */
+    const side=Math.random()<0.5?-1:1;
+    const xOff=side*(1.5+Math.random()*2.5);
+    mesh.rotation.x=-Math.PI/2;
+    mesh.rotation.z=Math.random()*Math.PI*2;
+    mesh.position.set(xOff,0.01,-2+Math.random()*-16);
+    parent.add(mesh);
+  }
+}
+
+/* City silhouette — flat dark BoxGeometries behind the pins, near-zero cost */
+function addCitySilhouette(parent){
+  const mat=new THREE.MeshBasicMaterial({color:0x040810});
+  const baseZ=-52;
+  for(let i=0;i<22;i++){
+    const w=0.8+Math.random()*2.0;
+    const h=1.2+Math.random()*6.0;
+    const b=new THREE.Mesh(new THREE.BoxGeometry(w,h,0.5),mat);
+    b.position.set(-9+i*0.9+(Math.random()-0.5)*0.4,h*0.5-0.2,baseZ);
+    parent.add(b);
+  }
+  /* Neon window dots on buildings — simple points */
+  const winGeo=new THREE.BufferGeometry();
+  const winN=PERF.mobile?60:120;
+  const wPos=new Float32Array(winN*3);
+  for(let i=0;i<winN;i++){
+    wPos[i*3]=(-9+Math.random()*18);
+    wPos[i*3+1]=0.3+Math.random()*5;
+    wPos[i*3+2]=baseZ+0.4;
+  }
+  winGeo.setAttribute('position',new THREE.BufferAttribute(wPos,3));
+  const winMat=new THREE.PointsMaterial({color:0x22d3ee,size:PERF.mobile?0.12:0.10,sizeAttenuation:true,transparent:true,opacity:0.7});
+  parent.add(new THREE.Points(winGeo,winMat));
+  /* Magenta windows */
+  const winGeo2=new THREE.BufferGeometry();
+  const wPos2=new Float32Array(winN*3);
+  for(let i=0;i<winN;i++){wPos2[i*3]=(-9+Math.random()*18);wPos2[i*3+1]=0.3+Math.random()*5;wPos2[i*3+2]=baseZ+0.4;}
+  winGeo2.setAttribute('position',new THREE.BufferAttribute(wPos2,3));
+  const winMat2=new THREE.PointsMaterial({color:0xff4fd8,size:PERF.mobile?0.10:0.08,sizeAttenuation:true,transparent:true,opacity:0.5});
+  parent.add(new THREE.Points(winGeo2,winMat2));
+}
+
+/* Neon pillars flanking the lane — simple boxes with emissive strip */
+function addNeonPillars(parent){
+  const darkMat=new THREE.MeshBasicMaterial({color:0x080c1a});
+  [[- 2.4,0xF0C040],[2.4,0x22d3ee]].forEach(([x,col])=>{
+    [-8,-3,2].forEach(z=>{
+      const pole=new THREE.Mesh(new THREE.BoxGeometry(0.12,2.2,0.12),darkMat);
+      pole.position.set(x,1.1,z);parent.add(pole);
+      /* Emissive neon strip */
+      const strip=new THREE.Mesh(new THREE.BoxGeometry(0.04,2.0,0.04),new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.85}));
+      strip.position.set(x+(x<0?0.05:-0.05),1.1,z);parent.add(strip);
+      /* Small point light only on desktop */
+      if(!PERF.mobile){const pl=new THREE.PointLight(col,0.5,3);pl.position.set(x,1.5,z);scene.add(pl);}
+    });
+  });
 }
 
 function makeTorch(pos){
