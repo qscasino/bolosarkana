@@ -248,9 +248,8 @@ html, body {
 .loading-arkana {
   margin: 0;
   font-size: clamp(40px, 6vw, 62px); font-weight: 900; letter-spacing: .14em;
-  background: linear-gradient(90deg, var(--cyan), var(--gold), var(--magenta));
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  filter: drop-shadow(0 0 12px rgba(34,211,238,.55));
+  color: var(--cyan);
+  text-shadow: 0 0 18px rgba(34,211,238,.70), 0 0 40px rgba(34,211,238,.35), 0 0 60px rgba(240,192,64,.20);
   animation: pulse 2s ease-in-out infinite;
 }
 .loading-games {
