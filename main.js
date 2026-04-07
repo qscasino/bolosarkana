@@ -29,55 +29,85 @@ let throwStartMs=0, score=0, frame=1, throwsInFrame=0;
 let pinsDownLastThrow=0, totalPinsThisFrame=0;
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 
-/* ══ AUDIO ══ */
+/* ══ AUDIO — contexto solo se crea tras gesto del usuario ══ */
 const AUDIO_URLS={ambient:"./assets/ambient.mp3",hit:"./assets/hit.mp3",reward:"./assets/reward.mp3"};
 const AudioSys=(()=>{
-  const buffers=new Map();
-  let ctx=null,master=null,sfx=null,music=null,unlocked=false,musicSrc=null;
-  const state={master:0.9,sfx:0.95,music:0.35,enabled:true};
-  async function ensure(){
-    if(ctx)return;
+  const buffers=new Map(), pending=new Map();
+  let ctx=null,master=null,sfx=null,music=null,musicSrc=null;
+  let unlocked=false;
+  const VOL={master:0.9,sfx:0.95,music:0.35};
+
+  /* Crea el contexto SOLO cuando se llama, nunca al inicio */
+  function createCtx(){
+    if(ctx)return true;
     const AC=window.AudioContext||window.webkitAudioContext;
-    if(!AC)return;
-    ctx=new AC(); master=ctx.createGain(); sfx=ctx.createGain(); music=ctx.createGain();
-    master.gain.value=state.master; sfx.gain.value=state.sfx; music.gain.value=state.music;
-    sfx.connect(master); music.connect(master); master.connect(ctx.destination);
+    if(!AC)return false;
+    try{
+      ctx=new AC();
+      master=ctx.createGain();sfx=ctx.createGain();music=ctx.createGain();
+      master.gain.value=VOL.master;sfx.gain.value=VOL.sfx;music.gain.value=VOL.music;
+      sfx.connect(master);music.connect(master);master.connect(ctx.destination);
+      return true;
+    }catch{ctx=null;return false;}
   }
-  async function decode(url){
-    try{const res=await fetch(url,{cache:"force-cache"});const arr=await res.arrayBuffer();
-      await ensure();if(!ctx)return null;return await ctx.decodeAudioData(arr);}catch{return null;}
-  }
-  async function load(name){
+
+  /* Carga un archivo — solo si el ctx ya existe */
+  async function loadBuf(name){
     if(buffers.has(name))return buffers.get(name);
+    if(pending.has(name))return pending.get(name);
+    if(!ctx)return null;
     const url=AUDIO_URLS[name];if(!url)return null;
-    const buf=await decode(url);if(buf)buffers.set(name,buf);return buf;
+    const p=(async()=>{
+      try{
+        const res=await fetch(url,{cache:"force-cache"});
+        const arr=await res.arrayBuffer();
+        const buf=await ctx.decodeAudioData(arr);
+        buffers.set(name,buf);pending.delete(name);return buf;
+      }catch{pending.delete(name);return null;}
+    })();
+    pending.set(name,p);return p;
   }
-  async function startAmbient(){
-    if(!AUDIO_URLS.ambient||!unlocked||!ctx||!state.enabled||musicSrc)return;
-    const buf=buffers.get("ambient")||(await load("ambient"));if(!buf)return;
-    const src=ctx.createBufferSource();src.buffer=buf;src.loop=true;
-    const g=ctx.createGain();g.gain.value=1.0;src.connect(g);g.connect(music);
-    try{src.start();musicSrc=src;}catch{}
-  }
+
+  /* Llamado tras primer gesto del usuario */
   async function unlock(){
-    if(!state.enabled)return;await ensure();if(!ctx)return;
-    try{if(ctx.state!=="running")await ctx.resume();}catch{}
-    unlocked=ctx&&ctx.state==="running";
-    if(unlocked){Object.keys(AUDIO_URLS).forEach(n=>load(n));startAmbient();}
+    if(unlocked)return;
+    if(!createCtx())return;
+    try{if(ctx.state==='suspended')await ctx.resume();}catch{}
+    if(ctx.state!=='running')return;
+    unlocked=true;
+    /* Precargar todos los sonidos ahora que el ctx está listo */
+    Object.keys(AUDIO_URLS).forEach(n=>loadBuf(n));
+    startAmbient();
   }
-  function play(name,{volume=1,rate=1,detune=0}={}){
-    if(!state.enabled||!unlocked||!ctx)return;
-    const buf=buffers.get(name);if(!buf){load(name);return;}
-    const src=ctx.createBufferSource();src.buffer=buf;
-    src.playbackRate.value=clamp(rate,0.25,3);if(detune)src.detune.value=detune;
-    const g=ctx.createGain();g.gain.value=clamp(volume,0,1);
-    src.connect(g);g.connect(sfx);try{src.start();}catch{}
+
+  async function startAmbient(){
+    if(!unlocked||!ctx||musicSrc)return;
+    const buf=await loadBuf('ambient');if(!buf)return;
+    try{
+      const src=ctx.createBufferSource();src.buffer=buf;src.loop=true;
+      const g=ctx.createGain();g.gain.value=1;src.connect(g);g.connect(music);
+      src.start();musicSrc=src;
+    }catch{}
   }
+
+  function play(name,{volume=1,rate=1}={}){
+    if(!unlocked||!ctx)return;
+    const buf=buffers.get(name);
+    if(!buf){loadBuf(name);return;}
+    try{
+      const src=ctx.createBufferSource();src.buffer=buf;
+      src.playbackRate.value=clamp(rate,0.25,3);
+      const g=ctx.createGain();g.gain.value=clamp(volume,0,1);
+      src.connect(g);g.connect(sfx);src.start();
+    }catch{}
+  }
+
   return{unlock,play,isUnlocked:()=>unlocked};
 })();
-const unlockOnce=()=>AudioSys.unlock();
-window.addEventListener("pointerdown",unlockOnce,{once:true,passive:true});
-window.addEventListener("keydown",unlockOnce,{once:true});
+/* Desbloquear en el primer gesto — {once:true} para no repetir */
+['pointerdown','touchstart','keydown'].forEach(ev=>
+  window.addEventListener(ev,()=>AudioSys.unlock(),{once:true,passive:true})
+);
 
 /* ══ REWARD STORAGE ══ */
 const REWARD_KEY="ark_bowling_v1";
