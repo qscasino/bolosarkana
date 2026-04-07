@@ -265,7 +265,7 @@ renderer.shadowMap.type=PERF.shadows?THREE.PCFSoftShadowMap:THREE.BasicShadowMap
 threeContainer.appendChild(renderer.domElement);
 const scene=new THREE.Scene();
 scene.fog=new THREE.FogExp2(0x050a18,PERF.fogDensity);
-scene.background=null;
+scene.background=new THREE.Color(0x050a18);
 const camera=new THREE.PerspectiveCamera(55,window.innerWidth/window.innerHeight,0.1,200);
 camera.position.set(0,4,10);
 window.addEventListener("resize",()=>{
@@ -276,6 +276,7 @@ window.addEventListener("resize",()=>{
 renderer.outputColorSpace=THREE.SRGBColorSpace;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure=PERF.mobile?0.95:1.05;
+renderer.setClearColor(0x050a18,1);
 
 /* ══ LIGHTS — Arkana neon ══ */
 const hemi=new THREE.HemisphereLight(0x0a2040,0x000005,PERF.mobile?0.35:0.45);
