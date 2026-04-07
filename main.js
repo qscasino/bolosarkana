@@ -278,7 +278,7 @@ renderer.toneMapping=THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure=PERF.mobile?0.95:1.05;
 
 /* ══ LIGHTS — Arkana neon ══ */
-const hemi=new THREE.HemisphericLight(0x0a2040,0x000005,PERF.mobile?0.35:0.45);
+const hemi=new THREE.HemisphereLight(0x0a2040,0x000005,PERF.mobile?0.35:0.45);
 scene.add(hemi);
 const sun=new THREE.DirectionalLight(0x88aaff,PERF.mobile?0.7:0.9);
 sun.position.set(-4,10,8);sun.castShadow=PERF.shadows;
